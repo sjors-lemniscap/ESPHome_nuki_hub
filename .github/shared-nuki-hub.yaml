@@ -1,0 +1,85 @@
+esphome:
+  name: test-nuki-hub
+  on_boot:
+    - if:
+        condition:
+          nuki_hub.paired: opener
+        then:
+          - logger.log: "YAML: already paired with the Opener"
+
+esp32:
+  variant: esp32
+
+wifi:
+  ssid: "test"
+  password: "test1234"
+
+api:
+  reboot_timeout: 0s
+
+logger:
+  level: DEBUG
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+mqtt:
+  broker: 192.168.1.10
+  discovery: false
+  log_topic:
+    topic: door/maintenance/log
+    level: INFO
+
+external_components:
+  - source:
+      type: local
+      path: "../components/"
+
+esp32_ble_tracker:
+
+nuki_hub:
+  - id: opener
+    type: opener
+    topic_prefix: door
+    security_pin: 1234
+    time_id: sntp_time
+    update_time: true
+    pairing_mode_at_boot: true
+  - id: smartlock
+    type: lock
+    topic_prefix: room
+    security_pin: 1234
+    keypad_publish_code: true
+    pairing:
+      ble_address: "54:D2:72:00:00:01"
+      secret_key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      authorization_id: "01020304"
+    debug:
+      communication: true
+
+lock:
+  - platform: nuki_hub
+    nuki_hub_id: opener
+    name: Opener
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    name: Smart Lock
+
+button:
+  - platform: template
+    name: Open
+    on_press:
+      - nuki_hub.action:
+          id: opener
+          action: electricStrikeActuation
+  - platform: template
+    name: Pair
+    on_press:
+      - nuki_hub.set_pairing_mode:
+          id: opener
+          pairing_mode: true
+  - platform: template
+    name: Unpair
+    on_press:
+      - nuki_hub.unpair: smartlock

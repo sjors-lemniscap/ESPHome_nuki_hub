@@ -7,6 +7,7 @@ import logging
 import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
+from esphome import automation
 from esphome.components import esp32_ble, esp32_ble_tracker, time as time_
 from esphome.components.esp32_ble import BTLoggers
 from esphome.components.nuki_lock import add_nuki_build_requirements
@@ -52,6 +53,8 @@ CONF_DEBUG_COMMUNICATION = "communication"
 CONF_DEBUG_READABLE_DATA = "readable_data"
 CONF_DEBUG_HEX_DATA = "hex_data"
 CONF_DEBUG_COMMAND = "command"
+CONF_ACTION = "action"
+CONF_PAIRING_MODE = "pairing_mode"
 
 TYPE_OPENER = "opener"
 TYPE_LOCK = "lock"
@@ -60,6 +63,12 @@ nuki_hub_ns = cg.esphome_ns.namespace("nuki_hub")
 NukiHubComponent = nuki_hub_ns.class_("NukiHubComponent", cg.Component)
 NukiHubOpener = nuki_hub_ns.class_("NukiHubOpener", NukiHubComponent)
 NukiHubLock = nuki_hub_ns.class_("NukiHubLock", NukiHubComponent)
+
+NukiHubActionAction = nuki_hub_ns.class_("NukiHubActionAction", automation.Action)
+NukiHubPairingModeAction = nuki_hub_ns.class_("NukiHubPairingModeAction", automation.Action)
+NukiHubUnpairAction = nuki_hub_ns.class_("NukiHubUnpairAction", automation.Action)
+NukiHubPairedCondition = nuki_hub_ns.class_("NukiHubPairedCondition", automation.Condition)
+NukiHubAvailableCondition = nuki_hub_ns.class_("NukiHubAvailableCondition", automation.Condition)
 
 
 
@@ -241,3 +250,65 @@ async def to_code(config):
         )
 
     add_nuki_build_requirements()
+
+
+# Automations
+
+@automation.register_action(
+    "nuki_hub.action",
+    NukiHubActionAction,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(NukiHubComponent),
+            cv.Required(CONF_ACTION): cv.templatable(cv.string),
+        }
+    ),
+    synchronous=True,
+)
+async def nuki_hub_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    cg.add(var.set_action(await cg.templatable(config[CONF_ACTION], args, cg.std_string)))
+    return var
+
+
+@automation.register_action(
+    "nuki_hub.set_pairing_mode",
+    NukiHubPairingModeAction,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(NukiHubComponent),
+            cv.Required(CONF_PAIRING_MODE): cv.templatable(cv.boolean),
+        }
+    ),
+    synchronous=True,
+)
+async def nuki_hub_set_pairing_mode_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    cg.add(var.set_pairing_mode(await cg.templatable(config[CONF_PAIRING_MODE], args, cg.bool_)))
+    return var
+
+
+_ID_ONLY_SCHEMA = automation.maybe_simple_id({cv.GenerateID(): cv.use_id(NukiHubComponent)})
+
+
+@automation.register_action("nuki_hub.unpair", NukiHubUnpairAction, _ID_ONLY_SCHEMA, synchronous=True)
+async def nuki_hub_unpair_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+@automation.register_condition("nuki_hub.paired", NukiHubPairedCondition, _ID_ONLY_SCHEMA)
+async def nuki_hub_paired_to_code(config, condition_id, template_arg, args):
+    var = cg.new_Pvariable(condition_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+@automation.register_condition("nuki_hub.available", NukiHubAvailableCondition, _ID_ONLY_SCHEMA)
+async def nuki_hub_available_to_code(config, condition_id, template_arg, args):
+    var = cg.new_Pvariable(condition_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var

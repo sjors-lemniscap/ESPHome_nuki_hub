@@ -16,6 +16,8 @@ jobs:
           - file: .github/arduino-component-encryption.yaml
           - file: .github/idf-component-encryption.yaml
           - file: .github/idf-component-hybrid.yaml
+          - file: .github/idf-nuki-hub.yaml
+          - file: .github/arduino-nuki-hub.yaml
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2

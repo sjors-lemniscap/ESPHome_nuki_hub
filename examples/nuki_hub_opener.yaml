@@ -1,0 +1,70 @@
+# A Nuki Opener on MQTT with the topics of Nuki Hub.
+# Values marked !secret come from secrets.yaml next to this file.
+
+esphome:
+  name: nuki-entrance
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
+    components: [nuki_lock, nuki_hub]
+
+esp32_ble_tracker:
+
+# Only needed for update_time
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  # ESPHome's own topics and discovery are not needed for Nuki Hub's topics
+  discovery: false
+  topic_prefix: entrance/esphome
+  # Nuki Hub reports its connection on <prefix>/maintenance/mqttConnectionState
+  birth_message:
+    topic: entrance/maintenance/mqttConnectionState
+    payload: online
+    retain: true
+  will_message:
+    topic: entrance/maintenance/mqttConnectionState
+    payload: offline
+    retain: true
+  # Nuki Hub's "MQTT logging": one log line per message
+  log_topic:
+    topic: entrance/maintenance/log
+    level: INFO
+
+nuki_hub:
+  - id: entrance
+    type: opener               # opener or lock
+    topic_prefix: entrance     # Nuki Hub's "MQTT path"
+    security_pin: !secret nuki_pin
+    time_id: sntp_time
+    update_time: true          # keep the Opener's clock right, time limited codes depend on it
+    # Pair with the button on the Opener: set this for the first boot, then remove it
+    # pairing_mode_at_boot: true
+
+# Optional: the Opener as a lock in Home Assistant through the ESPHome API
+# api:
+# lock:
+#   - platform: nuki_hub
+#     nuki_hub_id: entrance
+#     name: Entrance

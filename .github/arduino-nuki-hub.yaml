@@ -1,0 +1,6 @@
+packages:
+  common: !include shared-nuki-hub.yaml
+
+esp32:
+  framework:
+    type: arduino

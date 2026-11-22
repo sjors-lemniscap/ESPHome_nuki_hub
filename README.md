@@ -4,6 +4,8 @@ Turn an ESP32 into a local Bluetooth bridge for Nuki Smart Locks (1st–5th Gen,
 
 ![some dashboard entites](./docs/nuki_dashboard.png)
 
+> **This fork** adds [`nuki_hub`](docs/nuki_hub.md): the Nuki **Opener** and Smart Locks on MQTT with the topics and payloads of [Nuki Hub](https://github.com/technyon/nuki_hub), including keypad codes with time limits, time control, authorizations, settings and the activity log, each command answered with a result. The `nuki_lock` platform described below is unchanged.
+
 **Highlights**
 
 - Lock, unlock, unlatch and Lock 'n' Go from Home Assistant or ESPHome automations

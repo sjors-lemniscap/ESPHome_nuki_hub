@@ -52,11 +52,10 @@ def add_nuki_build_requirements():
         name="crc16",
         repo="https://github.com/AzonInc/Crc16.git",
     )
-    # NukiBleEsp32 (lock-only subset, Opener files excluded) is vendored directly as
-    # component sources instead of a fetched IDF component, see nuki_ble.cpp/.h,
-    # nuki_lock_protocol.cpp/.h etc. in this directory. It now talks to the lock via
-    # ESPHome's own (Bluedroid-based) BLE stack (esp32_ble_tracker/esp32_ble_client)
-    # instead of NimBLE.
+    # NukiBleEsp32 is vendored directly as component sources instead of a fetched IDF
+    # component, see nuki_ble.cpp/.h, nuki_lock_protocol.cpp/.h, nuki_opener_protocol.cpp/.h
+    # etc. in this directory. It talks to the Nuki device via ESPHome's own (Bluedroid-based)
+    # BLE stack (esp32_ble_tracker/esp32_ble_client) instead of NimBLE.
 
     # Nuki relies on seeing every advertisement to catch lock-state-changed notifications
     # (a status bit inside the manufacturer data - see NukiBle::parse_device()), so

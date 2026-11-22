@@ -14,6 +14,7 @@
 #endif
 
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -317,6 +318,10 @@ void NukiHubComponent::on_mqtt_connected_() {
       }
       ESP_LOGI(TAG, "Restart requested via MQTT");
       this->publish_hub_("/maintenance/reset", "0");
+      // A clean disconnect sends no last will: say it here
+      if (this->maintenance_enabled_) {
+        this->publish_hub_("/maintenance/mqttConnectionState", "offline");
+      }
       uint8_t reason = RESTART_REASON_MQTT;
       this->restart_reason_pref_.save(&reason);
       global_preferences->sync();
@@ -325,6 +330,13 @@ void NukiHubComponent::on_mqtt_connected_() {
   }
 
   this->log_marker_deadline_ = millis() + 3000;
+
+  // What happened while the broker was away was not published: read everything again
+  if (this->mqtt_connects_++ > 0 && this->is_paired()) {
+    this->want_state_ = this->want_config_ = this->want_battery_ = true;
+    this->want_keypad_ = this->want_auth_ = this->want_time_control_ = true;
+    this->want_log_ = this->publish_auth_log_;
+  }
 
   this->publish_("/action", "--");
   this->publish_("/keypad/actionJson", "--");
@@ -386,6 +398,27 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
 #endif
   if (this->is_paired()) {
     this->publish_int_("/rssi", this->ble()->get_rssi());
+  }
+}
+
+// The Nuki device advertises about once a second. Without advertisements for minutes it is
+// out of reach or without power, whatever the last command said.
+void NukiHubComponent::check_beacon_age_() {
+  if (!this->is_paired()) {
+    return;
+  }
+  const int64_t last = this->ble()->get_last_received_beacon_ts();
+  const int64_t now = esp_timer_get_time() / 1000;
+  const bool silent = now - last > BEACON_TIMEOUT_MS && now > BEACON_TIMEOUT_MS;
+  if (silent && !this->beacon_lost_) {
+    this->beacon_lost_ = true;
+    ESP_LOGW(TAG, "No Bluetooth advertisement from the %s for %u seconds", this->kind(),
+             (unsigned) (BEACON_TIMEOUT_MS / 1000));
+    this->set_available_(false);
+  } else if (!silent && this->beacon_lost_) {
+    this->beacon_lost_ = false;
+    ESP_LOGI(TAG, "The %s is advertising again", this->kind());
+    this->want_state_ = true;
   }
 }
 
@@ -546,6 +579,10 @@ void NukiHubComponent::loop() {
     this->publish_maintenance_(false);
   }
 #endif
+  if (now - this->last_beacon_check_ >= 10000) {
+    this->last_beacon_check_ = now;
+    this->check_beacon_age_();
+  }
 
   ble->update_connection_state();
 
@@ -586,6 +623,9 @@ void NukiHubComponent::loop() {
 
   if (this->op_active_ && !this->op_retry_pending_) {
     CmdResult result = this->op_.step();
+    if (result == CmdResult::Working) {
+      result = this->check_attempt_deadline_(now);
+    }
     if (result != CmdResult::Working) {
       this->finish_operation_(result);
     }
@@ -601,10 +641,34 @@ void NukiHubComponent::loop() {
   } else if (!this->start_next_operation_()) {
     return;
   }
+  this->attempt_started_ = now;
+  this->attempt_connected_ = false;
   CmdResult result = this->op_.step();
   if (result != CmdResult::Working) {
     this->finish_operation_(result);
   }
+}
+
+// The Bluetooth code waits for the connection without a limit of its own: a device that is
+// out of reach, switched off or held by another peer would block the queue for good.
+CmdResult NukiHubComponent::check_attempt_deadline_(uint32_t now) {
+  NukiBle *ble = this->ble();
+  if (!this->attempt_connected_ && ble->connected()) {
+    this->attempt_connected_ = true;
+  }
+  const uint32_t elapsed = now - this->attempt_started_;
+  if (!this->attempt_connected_ && elapsed > CONNECT_DEADLINE_MS) {
+    ESP_LOGW(TAG, "%s: Send encr msg failed due to unable to connect", this->kind());
+    ble->disconnect();
+    return CmdResult::TimeOut;
+  }
+  if (elapsed > ATTEMPT_DEADLINE_MS) {
+    ESP_LOGW(TAG, "%s: '%s' did not finish within %u seconds", this->kind(), this->op_.name,
+             (unsigned) (ATTEMPT_DEADLINE_MS / 1000));
+    ble->disconnect();
+    return CmdResult::TimeOut;
+  }
+  return CmdResult::Working;
 }
 
 void NukiHubComponent::notify(EventType event_type) {
@@ -780,6 +844,10 @@ void NukiHubComponent::publish_keypad_() {
 }
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
+  if (!this->is_paired()) {
+    this->publish_("/keypad/commandResultJson", "notPaired", false);
+    return;
+  }
   auto cmd = std::make_shared<KeypadCommand>();
   cmd->payload = payload;
 

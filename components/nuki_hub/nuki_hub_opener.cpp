@@ -212,6 +212,9 @@ bool NukiHubOpener::queue_action(const std::string &text) {
         this->state_known_ = true;
         this->publish_state_();
       }
+      // The Opener doesn't answer a state request on the connection the action ran on (the
+      // request times out): what follows gets a connection of its own
+      this->nuki_opener_.disconnect();
       this->set_timeout("state_follow_up", 1000, [this] { this->want_state_ = true; });
       this->log_refresh_at_ = millis() + 1500;
     } else {

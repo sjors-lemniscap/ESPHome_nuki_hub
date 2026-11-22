@@ -146,6 +146,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// The first tick of the next operation, picked from the queue or the pending polls
   bool start_next_operation_();
   void finish_operation_(CmdResult result);
+  /// Ends an attempt that waits for a connection or an answer for too long
+  CmdResult check_attempt_deadline_(uint32_t now);
+  void check_beacon_age_();
 
   std::string topic_(const char *suffix) const;
   std::string hub_topic_(const char *suffix) const;
@@ -226,6 +229,15 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   uint32_t next_op_time_{0};
   uint32_t last_loop_{0};
   static const size_t MAX_QUEUE = 24;
+  // Longest wait for the Bluetooth connection, and longest duration of one attempt
+  static const uint32_t CONNECT_DEADLINE_MS = 10000;
+  static const uint32_t ATTEMPT_DEADLINE_MS = 90000;
+  static const int64_t BEACON_TIMEOUT_MS = 180000;
+  uint32_t attempt_started_{0};
+  bool attempt_connected_{false};
+  bool beacon_lost_{false};
+  uint32_t last_beacon_check_{0};
+  uint32_t mqtt_connects_{0};
 
   // Polls waiting for a free slot
   bool want_state_{false};
