@@ -492,22 +492,35 @@ CmdResult NukiBle::retrieve_authorization_entries(const uint16_t offset, const u
     if (!this->authorization_entry_count_received_) {
       return CmdResult::Working;
     }
-    // Count is known now (just arrived in the notification), so size the buffer for it in
-    // one allocation instead of growing node-by-node as entries arrive.
-    this->list_of_authorization_entries_.init(this->expected_authorization_entry_count_);
+    // The buffer was sized when the count arrived, see handle_return_message(): the entries
+    // follow the count so closely that some are already in by now.
     this->auth_entries_retrieval_state_ = EntryRetrievalState::AwaitingEntries;
     this->auth_entries_retrieval_time_now_ = (esp_timer_get_time() / 1000);
+    this->auth_entries_last_size_ = 0;
   }
 
   //wait for return of Authorization Entries (0x000A)
-  if ((esp_timer_get_time() / 1000) - this->auth_entries_retrieval_time_now_ > this->general_timeout_duration_) {
-    ESP_LOGW(TAG, "Receive authorization entries timeout");
-    this->auth_entries_retrieval_state_ = EntryRetrievalState::Idle;
-    this->disconnect();
-    return CmdResult::TimeOut;
+  const size_t received = this->list_of_authorization_entries_.size();
+  if (received != this->auth_entries_last_size_) {
+    this->auth_entries_last_size_ = received;
+    this->auth_entries_retrieval_time_now_ = (esp_timer_get_time() / 1000);
   }
-  if (this->list_of_authorization_entries_.size() < this->expected_authorization_entry_count_) {
-    return CmdResult::Working;
+  if (received < this->expected_authorization_entry_count_) {
+    const int64_t waited = (esp_timer_get_time() / 1000) - this->auth_entries_retrieval_time_now_;
+    // The count can be higher than the number of entries that follow (seen on an Opener:
+    // 3 announced, 2 sent). Once entries came in and nothing followed for a second, the
+    // list is taken as complete.
+    if (received > 0 && waited > 1000) {
+      ESP_LOGD(TAG, "%u authorization entries announced, %u received", this->expected_authorization_entry_count_,
+               (unsigned) received);
+    } else if (waited > this->general_timeout_duration_) {
+      ESP_LOGW(TAG, "Receive authorization entries timeout");
+      this->auth_entries_retrieval_state_ = EntryRetrievalState::Idle;
+      this->disconnect();
+      return CmdResult::TimeOut;
+    } else {
+      return CmdResult::Working;
+    }
   }
 
   this->auth_entries_retrieval_state_ = EntryRetrievalState::Idle;
@@ -869,6 +882,33 @@ bool NukiBle::migrate_legacy_credentials() {
 
   ESP_LOGI(TAG, "[%s] Migrated pairing credentials from legacy storage", this->device_name_.c_str());
   return true;
+}
+
+bool NukiBle::import_credentials(const uint8_t* ble_address, const uint8_t* secret_key, const uint8_t* authorization_id,
+                                 uint32_t pin_code, bool ultra) {
+  uint8_t address[6];
+  uint8_t key[32];
+  uint8_t auth_id[4];
+  memcpy(address, ble_address, sizeof(address));
+  memcpy(key, secret_key, sizeof(key));
+  memcpy(auth_id, authorization_id, sizeof(auth_id));
+  if (is_char_array_empty(key, sizeof(key)) || is_char_array_empty(auth_id, sizeof(auth_id))) {
+    return false;
+  }
+  uint16_t pin = ultra ? 0 : (uint16_t) pin_code;
+  uint32_t ultra_pin = ultra ? pin_code : 0;
+  if (!(this->ble_address_pref_.save(&address)
+        && this->secret_key_pref_.save(&key)
+        && this->auth_id_pref_.save(&auth_id)
+        && this->security_pincode_pref_.save(&pin)
+        && this->ultra_pincode_pref_.save(&ultra_pin)
+        && this->is_ultra_pref_.save(&ultra)
+        && esphome::global_preferences->sync())) {
+    ESP_LOGE(TAG, "[%s] Failed to store the imported credentials", this->device_name_.c_str());
+    return false;
+  }
+  this->is_paired_ = this->retrieve_credentials();
+  return this->is_paired_;
 }
 
 bool NukiBle::retrieve_credentials() {
@@ -1562,6 +1602,9 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     case Command::AuthorizationEntryCount : {
       print_buffer((uint8_t*)data, dataLen, false, "authorizationEntryCount", this->debug_nuki_hex_data_);
       memcpy(&this->expected_authorization_entry_count_, data, 2);
+      // Size the buffer right here: the entries arrive within the same milliseconds, before
+      // retrieve_authorization_entries() gets its next turn
+      this->list_of_authorization_entries_.init(this->expected_authorization_entry_count_);
       this->authorization_entry_count_received_ = true;
       ESP_LOGD(TAG, "authorizationEntryCount: %d", this->expected_authorization_entry_count_);
       break;
@@ -1597,6 +1640,14 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::KeypadCodeCount : {
       memcpy(&this->nr_of_keypad_codes_, data, 2);
+      // The count is the lock's total, but it only sends the codes within offset/count. Size
+      // the buffer right here: the codes can arrive before retrieve_keypad_entries() gets
+      // its next turn
+      this->expected_keypad_codes_ = std::min<uint16_t>(
+          this->nr_of_keypad_codes_ > this->keypad_request_offset_ ? this->nr_of_keypad_codes_ - this->keypad_request_offset_ : 0,
+          this->keypad_request_count_);
+      this->list_of_key_pad_entries_.init(this->expected_keypad_codes_);
+      this->nr_of_received_keypad_codes_ = 0;
       this->keypad_code_count_received_ = true;
       print_buffer((uint8_t*)data, dataLen, false, "keypadCodeCount", this->debug_nuki_hex_data_);
       if (this->debug_nuki_readable_data_) {

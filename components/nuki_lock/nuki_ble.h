@@ -411,6 +411,20 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
       this->pairing_wait_logged_ = false;
     }
 
+    /**
+     * @brief Stores a pairing made elsewhere (for example by Nuki Hub on the same ESP32) as
+     * this device's pairing, so the Nuki device doesn't have to be paired again. Call after
+     * initialize().
+     *
+     * @param ble_address the 6 bytes of the Nuki device's Bluetooth address, first byte first
+     * @param secret_key the 32 byte long-term key of the pairing
+     * @param authorization_id the 4 byte authorization id, as stored by NukiBleEsp32
+     * @param pin_code the security PIN, 0 if none
+     * @return true if the credentials were stored
+     */
+    bool import_credentials(const uint8_t* ble_address, const uint8_t* secret_key, const uint8_t* authorization_id,
+                            uint32_t pin_code, bool ultra = false);
+
   protected:
     // Connects (if needed) to the service relevant for `pairing` (pairing service/GDIO vs.
     // device service/USDIO - see register_on_gdio_char()/register_on_usdio_char()) and returns
@@ -482,6 +496,9 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     int64_t keypad_retrieval_time_now_ = 0;
     // Codes the lock sends for the requested offset/count: min(count, total - offset)
     uint16_t expected_keypad_codes_ = 0;
+    // offset/count of the request in flight, for expected_keypad_codes_
+    uint16_t keypad_request_offset_ = 0;
+    uint16_t keypad_request_count_ = 0;
     // nr_of_received_keypad_codes_ at the last timeout restart, so the timeout restarts per code
     uint16_t last_received_keypad_codes_ = 0;
     // RequestKeypadCodes uses cmd_chall_state_machine(), whose "success" detection is satisfied
@@ -506,6 +523,8 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     int64_t auth_entries_retrieval_time_now_ = 0;
     bool authorization_entry_count_received_ = false;
     uint16_t expected_authorization_entry_count_ = 0;
+    // Entries received at the last timeout restart, so the timeout restarts per entry
+    size_t auth_entries_last_size_ = 0;
     // Guards the clear/reset above against the same Idle-state-keeps-getting-re-polled
     // problem described for keypad_request_sent.
     bool auth_entries_request_sent_ = false;
