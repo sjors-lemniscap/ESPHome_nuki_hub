@@ -5,6 +5,7 @@
 #include "esphome/core/helpers.h"
 #include "esphome/core/preferences.h"
 #include "esphome/components/json/json_util.h"
+#include "esphome/components/lock/lock.h"
 #include "esphome/components/nuki_lock/nuki_ble.h"
 
 #ifdef USE_TIME
@@ -116,6 +117,11 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool request_action(const std::string &action);
   void request_state_update() { this->want_state_ = true; }
 
+  /// The device state for a lock entity
+  virtual lock::LockState entity_state() const = 0;
+  /// The action a lock entity asks for when locking, unlocking or opening
+  virtual const char *entity_action(bool lock, bool open) const = 0;
+
   template<typename F> void add_on_state_callback(F &&callback) { this->state_callback_.add(std::forward<F>(callback)); }
 
  protected:
@@ -201,7 +207,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool publish_auth_log_{true};
   uint8_t command_retries_{3};
   uint32_t command_retry_delay_{1000};
-  uint32_t ble_general_timeout_{3000};
+  uint32_t ble_general_timeout_{10000};
   uint32_t ble_command_timeout_{3000};
   bool update_time_{false};
   bool maintenance_enabled_{true};

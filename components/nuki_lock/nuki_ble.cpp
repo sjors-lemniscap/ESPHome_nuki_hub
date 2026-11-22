@@ -1561,6 +1561,11 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     case Command::Status : {
       print_buffer((uint8_t*)data, dataLen, false, "status", this->debug_nuki_hex_data_);
       this->received_status_ = data[0];
+      if ((CommandStatus) this->received_status_ == CommandStatus::Accepted) {
+        this->status_accepted_seen_ = true;
+      } else if ((CommandStatus) this->received_status_ == CommandStatus::Complete) {
+        this->status_complete_seen_ = true;
+      }
       if (this->debug_nuki_communication_) {
         if (this->received_status_ == 0) {
           ESP_LOGD(TAG, "command COMPLETE");
@@ -1578,6 +1583,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     case Command::ErrorReport : {
       ESP_LOGE(TAG, "Error: %02x for command: %02x:%02x", data[0], data[2], data[1]);
       memcpy(&this->error_code_, &data[0], sizeof(this->error_code_));
+      this->error_report_seen_ = true;
       this->log_error_code(data[0]);
       if ((uint8_t)data[0] == (uint8_t)0x21) {
         if (this->event_handler_) {

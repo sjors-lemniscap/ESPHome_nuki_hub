@@ -1,4 +1,5 @@
 #include "nuki_hub_opener.h"
+#include "nuki_hub_names.h"
 
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
@@ -18,30 +19,6 @@ static const char *const TAG = "nuki_hub.opener";
 // --------------------------------------------------------------------------------------------
 // Names, as Nuki Hub publishes and accepts them
 // --------------------------------------------------------------------------------------------
-
-struct Name {
-  uint8_t value;
-  const char *text;
-};
-
-template<size_t N> static const char *name_of(const Name (&table)[N], uint8_t value, const char *fallback) {
-  for (const auto &row : table) {
-    if (row.value == value) {
-      return row.text;
-    }
-  }
-  return fallback;
-}
-
-template<size_t N> static bool value_of(const Name (&table)[N], const std::string &text, uint8_t *value) {
-  for (const auto &row : table) {
-    if (text == row.text) {
-      *value = row.value;
-      return true;
-    }
-  }
-  return false;
-}
 
 static const Name LOCK_ACTIONS[] = {
     {0x01, "ActivateRTO"}, {0x02, "DeactivateRTO"}, {0x03, "ElectricStrikeActuation"}, {0x04, "ActivateCM"},
@@ -78,22 +55,17 @@ static const Name BUTTON_PRESS_ACTIONS[] = {
     {0, "No Action"}, {1, "Toggle RTO"}, {2, "Activate RTO"}, {3, "Deactivate RTO"},
     {4, "Toggle CM"}, {5, "Activate CM"}, {6, "Deactivate CM"}, {7, "Open"},
 };
-static const Name BATTERY_TYPES[] = {{0, "Alkali"}, {1, "Accumulators"}, {2, "Lithium"}, {3, "No Warnings"}};
-static const Name ADVERTISING_MODES[] = {{0, "Automatic"}, {1, "Normal"}, {2, "Slow"}, {3, "Slowest"}};
 static const Name LOG_SOURCES[] = {
     {0, "Doorbell"}, {1, "Timecontrol"}, {2, "App"}, {3, "Button"}, {4, "Fob"}, {5, "Bridge"}, {6, "Keypad"},
 };
 
 static bool parse_lock_action(const std::string &text, opener::LockAction *action) {
-  for (const auto &row : LOCK_ACTIONS) {
-    // Nuki Hub accepts the name with a lower or an upper case first letter
-    if (text.size() == strlen(row.text) && tolower(text[0]) == tolower(row.text[0]) &&
-        text.compare(1, std::string::npos, row.text + 1) == 0) {
-      *action = (opener::LockAction) row.value;
-      return true;
-    }
+  uint8_t value;
+  if (!action_of(LOCK_ACTIONS, text, &value)) {
+    return false;
   }
-  return false;
+  *action = (opener::LockAction) value;
+  return true;
 }
 
 // --------------------------------------------------------------------------------------------
@@ -188,6 +160,22 @@ void NukiHubOpener::publish_state_() {
 
 void NukiHubOpener::publish_unavailable() { this->state_known_ = false; }
 
+lock::LockState NukiHubOpener::entity_state() const {
+  if (!this->state_known_) {
+    return lock::LOCK_STATE_NONE;
+  }
+  if (this->state_.nukiState == opener::State::ContinuousMode) {
+    return lock::LOCK_STATE_UNLOCKED;
+  }
+  switch (this->state_.lockState) {
+    case opener::LockState::Locked: return lock::LOCK_STATE_LOCKED;
+    case opener::LockState::RTOactive:
+    case opener::LockState::Open: return lock::LOCK_STATE_UNLOCKED;
+    case opener::LockState::Opening: return lock::LOCK_STATE_UNLOCKING;
+    default: return lock::LOCK_STATE_JAMMED;
+  }
+}
+
 void NukiHubOpener::publish_ring_(bool locked) {
   ESP_LOGI(TAG, "Ring detected (%s)", locked ? "locked" : "open");
   this->publish_("/ring", locked ? "ringlocked" : "ring");
@@ -267,6 +255,10 @@ Operation NukiHubOpener::make_config_operation() {
     if (result == CmdResult::Success) {
       this->advanced_config_valid_ = true;
       this->publish_advanced_config_();
+      // "complete" follows an action only after the strike was released again
+      this->nuki_opener_.set_action_timeout(std::max<uint32_t>(
+          15000, (uint32_t) this->advanced_config_.electricStrikeDelay +
+                     this->advanced_config_.electricStrikeDuration + 5000));
     }
     return result;
   };
@@ -795,9 +787,13 @@ Operation NukiHubOpener::make_log_operation() {
       if (!this->log_marker_known_ || this->log_batch_.empty() || oldest <= this->log_marker_ + 1) {
         return CmdResult::Success;
       }
-      // Entries between the marker and this batch are missing, at most 100 are fetched
-      this->log_fill_count_ = std::min<uint32_t>(oldest - this->log_marker_ - 1, 100);
-      this->log_fill_start_ = oldest - this->log_fill_count_;
+      // Entries between the marker and this batch are missing, at most 100 are fetched. An
+      // Opener (firmware 1.12.4) answers an ascending request with the entries after the
+      // start index, not from it on: ask from one entry earlier and for one more, which
+      // covers both readings. What comes twice is dropped below.
+      const uint32_t missing = std::min<uint32_t>(oldest - this->log_marker_ - 1, 100);
+      this->log_fill_count_ = missing + 1;
+      this->log_fill_start_ = oldest - missing - 1;
       this->log_stage_ = 1;
       ESP_LOGD(TAG, "Retrieving %u missing log entries from %" PRIu32, this->log_fill_count_, this->log_fill_start_);
     }
@@ -808,6 +804,13 @@ Operation NukiHubOpener::make_log_operation() {
     if (result == CmdResult::Success) {
       std::vector<opener::LogEntry> missing;
       this->nuki_opener_.get_log_entries(&missing);
+      uint32_t low = UINT32_MAX, high = 0;
+      for (const auto &entry : missing) {
+        low = std::min(low, entry.index);
+        high = std::max(high, entry.index);
+      }
+      ESP_LOGD(TAG, "Asked for %u log entries from %" PRIu32 ", received %u: %" PRIu32 "..%" PRIu32, this->log_fill_count_,
+               this->log_fill_start_, (unsigned) missing.size(), missing.empty() ? 0 : low, high);
       for (const auto &entry : missing) {
         const bool known = std::any_of(this->log_batch_.begin(), this->log_batch_.end(),
                                        [&entry](const opener::LogEntry &e) { return e.index == entry.index; });
@@ -860,7 +863,6 @@ void NukiHubOpener::log_entry_to_json_(const opener::LogEntry &log, JsonObject e
     }
     case opener::LoggingType::KeypadAction: {
       entry["action"] = name_of(LOCK_ACTIONS, log.data[0], "Unknown");
-      static const Name KEYPAD_TRIGGERS[] = {{0, "arrowkey"}, {1, "code"}, {2, "fingerprint"}};
       entry["trigger"] = name_of(KEYPAD_TRIGGERS, log.data[1], "Unknown");
       if (log.data[2] == (uint8_t) opener::LogEntryCompletionStatus::NotAuthorized) {
         entry["completionStatus"] = "notAuthorized";

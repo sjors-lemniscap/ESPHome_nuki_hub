@@ -54,10 +54,12 @@ CONF_DEBUG_HEX_DATA = "hex_data"
 CONF_DEBUG_COMMAND = "command"
 
 TYPE_OPENER = "opener"
+TYPE_LOCK = "lock"
 
 nuki_hub_ns = cg.esphome_ns.namespace("nuki_hub")
 NukiHubComponent = nuki_hub_ns.class_("NukiHubComponent", cg.Component)
 NukiHubOpener = nuki_hub_ns.class_("NukiHubOpener", NukiHubComponent)
+NukiHubLock = nuki_hub_ns.class_("NukiHubLock", NukiHubComponent)
 
 
 
@@ -118,7 +120,7 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_PUBLISH_ACTIVITY_LOG, default=True): cv.boolean,
             cv.Optional(CONF_COMMAND_RETRIES, default=3): cv.int_range(min=0, max=10),
             cv.Optional(CONF_COMMAND_RETRY_DELAY, default="1s"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_BLE_GENERAL_TIMEOUT, default="3s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_BLE_GENERAL_TIMEOUT, default="10s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_BLE_COMMAND_TIMEOUT, default="3s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TIME_ID): cv.use_id(time_.RealTimeClock),
             cv.Optional(CONF_UPDATE_TIME, default=False): cv.boolean,
@@ -149,8 +151,8 @@ CONFIG_SCHEMA = cv.All(
     cv.typed_schema(
         {
             TYPE_OPENER: _BASE_SCHEMA.extend({cv.GenerateID(): cv.declare_id(NukiHubOpener)}),
+            TYPE_LOCK: _BASE_SCHEMA.extend({cv.GenerateID(): cv.declare_id(NukiHubLock)}),
         },
-        default_type=TYPE_OPENER,
     ),
     esp32_ble.consume_connection_slots(1, "nuki_hub"),
     _validate_id_length,
@@ -181,6 +183,8 @@ async def to_code(config):
     esp32_ble.register_bt_logger(BTLoggers.GATT)
     if config[CONF_TYPE] == TYPE_OPENER:
         await esp32_ble_tracker.register_client(var.get_nuki_opener(), config)
+    else:
+        await esp32_ble_tracker.register_client(var.get_nuki_lock(), config)
 
     if not CORE.data.get("nuki_scan_parameters_set"):
         CORE.data["nuki_scan_parameters_set"] = True

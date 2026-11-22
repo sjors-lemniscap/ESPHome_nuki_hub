@@ -474,6 +474,10 @@ class NukiLock : public NukiBle {
      */
     void get_log_entries(std::vector<LogEntry>* requestedLogEntries);
 
+    /// Number of entries received so far, to see when a list the lock is still sending is complete
+    size_t get_log_entry_list_size() const { return this->list_of_log_entries_.size(); }
+    size_t get_time_control_entry_list_size() const { return this->list_of_time_control_entries_.size(); }
+
     /**
      * @brief Request the lock via BLE to send the log entries
      *
@@ -588,6 +592,9 @@ class NukiLock : public NukiBle {
     // No count notification precedes these entries, so the final size isn't known up
     // front - std::vector still avoids std::list's per-node allocation churn.
     std::vector<TimeControlEntry> list_of_time_control_entries_;
+    // Set while a list request is in flight, see retrieve_time_control_entries()/retrieve_log_entries()
+    bool time_control_request_started_{false};
+    bool log_request_started_{false};
     std::vector<LogEntry> list_of_log_entries_;
     std::vector<InternalLogEntry> list_of_internal_log_entries_;
     std::vector<WifiScanEntry> list_of_wifi_scan_entries_;

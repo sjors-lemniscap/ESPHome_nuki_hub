@@ -670,9 +670,18 @@ CmdResult NukiLock::retrieve_time_control_entries() {
   action.command = Command::RequestTimeControlEntries;
   action.payloadLen = 0;
 
-  this->list_of_time_control_entries_.clear();
+  // Called once per tick until done: clear the list when the request starts only, entries
+  // can arrive before the tick that reports success
+  if (!this->time_control_request_started_) {
+    this->list_of_time_control_entries_.clear();
+    this->time_control_request_started_ = true;
+  }
 
-  return this->execute_action(action);
+  CmdResult result = this->execute_action(action);
+  if (result != CmdResult::Working) {
+    this->time_control_request_started_ = false;
+  }
+  return result;
 }
 
 void NukiLock::get_time_control_entries(std::vector<TimeControlEntry>* requestedTimeControlEntries) {
@@ -711,9 +720,18 @@ CmdResult NukiLock::retrieve_log_entries(const uint32_t startIndex, const uint16
   memcpy(action.payload, &payload, sizeof(payload));
   action.payloadLen = sizeof(payload);
 
-  this->list_of_log_entries_.clear();
+  // Called once per tick until done: clear the list when the request starts only, entries
+  // can arrive before the tick that reports success
+  if (!this->log_request_started_) {
+    this->list_of_log_entries_.clear();
+    this->log_request_started_ = true;
+  }
 
-  return this->execute_action(action);
+  CmdResult result = this->execute_action(action);
+  if (result != CmdResult::Working) {
+    this->log_request_started_ = false;
+  }
+  return result;
 }
 
 bool NukiLock::is_battery_critical() {

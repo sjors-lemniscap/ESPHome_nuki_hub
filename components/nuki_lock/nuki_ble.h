@@ -101,6 +101,15 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * @param timeoutMs
      */
     void set_command_timeout(uint32_t timeoutMs);
+
+    /**
+     * @brief Set how long an accepted action (lock, unlock, open, ...) may take to complete, in
+     * milliseconds. The device answers "accepted" at once and "complete" when the action is
+     * through, an Opener for example only after the electric strike was released again.
+     *
+     * @param timeoutMs
+     */
+    void set_action_timeout(uint32_t timeoutMs) { this->action_timeout_duration_ = timeoutMs; }
     
     /**
      * @brief Set the BLE Connect Timeout in seconds.
@@ -458,6 +467,19 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
 
     Command last_msg_code_received_ = Command::Empty;
 
+    // What arrived since the command in flight was sent. The command state machines look at
+    // these instead of last_msg_code_received_: several messages can arrive between two of
+    // their steps (the device pushes its state right after "accepted"), and only the last
+    // one would be seen.
+    bool status_accepted_seen_ = false;
+    bool status_complete_seen_ = false;
+    bool error_report_seen_ = false;
+    void clear_seen_responses_() {
+      this->status_accepted_seen_ = false;
+      this->status_complete_seen_ = false;
+      this->error_report_seen_ = false;
+    }
+
     bool debug_nuki_connect_ = false;
     bool debug_nuki_communication_ = false;
     bool debug_nuki_readable_data_ = false;
@@ -473,6 +495,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     uint32_t timeout_duration_ = 1000;
     uint32_t general_timeout_duration_ = 10000;
     uint32_t command_timeout_duration_ = 3000;
+    uint32_t action_timeout_duration_ = 15000;
     // Kept (and still settable) for API compatibility with nuki_lock.cpp's setup(); no
     // longer consumed internally - BLEClientBase::connect() is a single non-blocking
     // attempt per call, and the existing execute_action()-driven retry-via-repeated-calls
@@ -1003,6 +1026,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
       memcpy(payload, action.payload, action.payloadLen);
       memcpy(&payload[action.payloadLen], this->challenge_nonce_k_, sizeof(this->challenge_nonce_k_));
 
+      this->clear_seen_responses_();
       if (this->send_encrypted_message(action.command, payload, action.payloadLen + sizeof(this->challenge_nonce_k_))) {
         this->time_now_ = (esp_timer_get_time() / 1000);
         this->nuki_command_state_ = CommandState::CmdSent;
@@ -1032,11 +1056,21 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
         this->disconnect();
         this->nuki_command_state_ = CommandState::Idle;
         return CmdResult::TimeOut;
-      } else if (this->last_msg_code_received_ == Command::Status && (CommandStatus)this->received_status_ == CommandStatus::Accepted) {
+      } else if (this->error_report_seen_) {
+        // Refused right away (busy, not allowed, ...), no "accepted" will follow
+        if (this->debug_nuki_communication_) {
+          ESP_LOGD(HPP_TAG, "Command refused");
+        }
+        const bool busy = this->error_code_ == 69;
+        this->disconnect();
+        this->nuki_command_state_ = CommandState::Idle;
+        this->last_msg_code_received_ = Command::Empty;
+        return busy ? CmdResult::Lock_Busy : CmdResult::Failed;
+      } else if (this->status_accepted_seen_) {
         this->time_now_ = (esp_timer_get_time() / 1000);
         this->nuki_command_state_ = CommandState::CmdAccepted;
         this->last_msg_code_received_ = Command::Empty;
-      } else if (this->last_msg_code_received_ == Command::Status && (CommandStatus)this->received_status_ == CommandStatus::Complete) {
+      } else if (this->status_complete_seen_) {
         //accept was skipped on lock because ie unlock command when lock allready unlocked?
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command success (skipped)");
@@ -1051,12 +1085,12 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
       if (this->debug_nuki_communication_) {
         ESP_LOGD(HPP_TAG, "Receiving complete");
       }
-      if ((esp_timer_get_time() / 1000) - this->time_now_ > this->command_timeout_duration_) {
+      if ((esp_timer_get_time() / 1000) - this->time_now_ > this->action_timeout_duration_) {
         ESP_LOGW(HPP_TAG, "Command failed: timeout");
         this->disconnect();
         this->nuki_command_state_ = CommandState::Idle;
         return CmdResult::TimeOut;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ != 69) {
+      } else if (this->error_report_seen_ && this->error_code_ != 69) {
         if (this->debug_nuki_communication_) {
             ESP_LOGD(HPP_TAG, "Sending command failed");
         }
@@ -1064,7 +1098,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Failed;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ == 69) {
+      } else if (this->error_report_seen_ && this->error_code_ == 69) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command failed: lock busy");
         }
@@ -1072,7 +1106,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Lock_Busy;
-      } else if (this->last_msg_code_received_ == Command::Status && (CommandStatus)this->received_status_ == CommandStatus::Complete) {
+      } else if (this->status_complete_seen_) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command success");
         }

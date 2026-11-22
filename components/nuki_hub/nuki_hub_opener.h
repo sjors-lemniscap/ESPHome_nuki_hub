@@ -20,6 +20,11 @@ class NukiHubOpener : public NukiHubComponent {
   const opener::OpenerState &state() const { return this->state_; }
   bool state_known() const { return this->state_known_; }
 
+  lock::LockState entity_state() const override;
+  const char *entity_action(bool lock, bool open) const override {
+    return open ? "electricStrikeActuation" : (lock ? "deactivateRTO" : "activateRTO");
+  }
+
  protected:
   Operation make_state_operation() override;
   Operation make_config_operation() override;
