@@ -8,7 +8,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
 from esphome import automation
-from esphome.components import esp32_ble, esp32_ble_tracker, time as time_
+from esphome.components import esp32_ble, esp32_ble_tracker, logger, time as time_
 from esphome.components.esp32_ble import BTLoggers
 from esphome.components.nuki_lock import add_nuki_build_requirements
 from esphome.const import CONF_ID, CONF_TIME_ID, CONF_TYPE
@@ -17,7 +17,7 @@ from esphome.core import CORE
 LOGGER = logging.getLogger(__name__)
 
 CODEOWNERS = ["@sjors-lemniscap"]
-DEPENDENCIES = ["esp32_ble_tracker", "mqtt"]
+DEPENDENCIES = ["esp32_ble_tracker"]
 AUTO_LOAD = ["nuki_lock", "esp32_ble_client", "json", "lock"]
 MULTI_CONF = True
 
@@ -47,6 +47,7 @@ CONF_BLE_GENERAL_TIMEOUT = "ble_general_timeout"
 CONF_BLE_COMMAND_TIMEOUT = "ble_command_timeout"
 CONF_UPDATE_TIME = "update_time"
 CONF_PUBLISH_MAINTENANCE = "publish_maintenance"
+CONF_MQTT_LOG = "mqtt_log"
 CONF_DEBUG = "debug"
 CONF_DEBUG_CONNECT = "connect"
 CONF_DEBUG_COMMUNICATION = "communication"
@@ -134,6 +135,7 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_TIME_ID): cv.use_id(time_.RealTimeClock),
             cv.Optional(CONF_UPDATE_TIME, default=False): cv.boolean,
             cv.Optional(CONF_PUBLISH_MAINTENANCE, default=True): cv.boolean,
+            cv.Optional(CONF_MQTT_LOG): logger.is_log_level,
             cv.Optional(CONF_DEBUG): cv.Schema(
                 {
                     cv.Optional(CONF_DEBUG_CONNECT, default=False): cv.boolean,
@@ -172,6 +174,10 @@ CONFIG_SCHEMA = cv.All(
 
 def _final_validate(config):
     full_config = fv.full_config.get()
+    if "mqtt" not in full_config:
+        # Without MQTT only the lock entity (lock: - platform: nuki_hub) and the automations remain
+        LOGGER.warning("nuki_hub: no mqtt: component configured, the Nuki Hub topics are not available.")
+        return config
     mqtt_conf = full_config.get("mqtt", {})
     if mqtt_conf.get("discovery", True) is not False and "api" in full_config:
         LOGGER.warning("nuki_hub: consider 'discovery: false' in mqtt: to not announce all entities over MQTT as well.")
@@ -235,6 +241,9 @@ async def to_code(config):
     cg.add(var.set_ble_command_timeout(config[CONF_BLE_COMMAND_TIMEOUT]))
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
+    if CONF_MQTT_LOG in config:
+        logger.request_log_listener()
+        cg.add(var.set_mqtt_log_level(logger.LOG_LEVELS[config[CONF_MQTT_LOG]]))
     if CONF_TIME_ID in config:
         clock = await cg.get_variable(config[CONF_TIME_ID])
         cg.add(var.set_time(clock))

@@ -47,10 +47,6 @@ mqtt:
     topic: entrance/maintenance/mqttConnectionState
     payload: offline
     retain: true
-  # Nuki Hub's "MQTT logging": one log line per message
-  log_topic:
-    topic: entrance/maintenance/log
-    level: INFO
 
 nuki_hub:
   - id: entrance
@@ -59,6 +55,7 @@ nuki_hub:
     security_pin: !secret nuki_pin
     time_id: sntp_time
     update_time: true          # keep the Opener's clock right, time limited codes depend on it
+    mqtt_log: INFO             # log lines on <prefix>/maintenance/log, like Nuki Hub's MQTT logging
     # Pair with the button on the Opener: set this for the first boot, then remove it
     # pairing_mode_at_boot: true
 

@@ -31,6 +31,9 @@ ESPHome device.
 | Maintenance | uptime, free heap, Wi-Fi signal, restart reasons, log lines, restart over MQTT |
 | Home Assistant | optional lock entity through the ESPHome API (`lock: - platform: nuki_hub`) |
 
+Without an `mqtt:` component the Nuki Hub topics are not available, and what remains is the
+lock entity and the automations: an Opener in Home Assistant through the ESPHome API.
+
 Several devices can be configured on one ESP32, each with its own `topic_prefix`. Every
 device uses one Bluetooth connection slot (`esp32_ble: max_connections`, default 3).
 
@@ -84,11 +87,12 @@ nuki_hub:
 | `time_id` | | A `time` component, for `update_time` |
 | `update_time` | `false` | Set the clock of the Nuki device at boot and with every config query |
 | `publish_maintenance` | `true` | Publish the `<prefix>/maintenance/...` and `<prefix>/info/...` topics |
+| `mqtt_log` | off | A log level (`INFO`, `DEBUG`, ...): publish the log lines up to that level on `<prefix>/maintenance/log`, one line per message, like Nuki Hub's "MQTT logging" |
 | `debug` | | `connect`, `communication`, `readable_data`, `hex_data`, `command`: extra logging of the Bluetooth protocol |
 
-Nuki Hub's connection state and log topics are plain MQTT features and are set in the `mqtt:`
+Nuki Hub's connection state is the last will of the MQTT connection and is set in the `mqtt:`
 block, see the example: `birth_message`/`will_message` on
-`<prefix>/maintenance/mqttConnectionState` and `log_topic` on `<prefix>/maintenance/log`.
+`<prefix>/maintenance/mqttConnectionState`.
 
 ## Pairing
 
@@ -161,11 +165,14 @@ Below `<prefix>`:
 | `maintenance/restartReasonNukiHub` | read | `RequestedViaMqtt` or `NotApplicable` |
 | `maintenance/restartReasonNukiEsp` | read | the ESP32's reset reason |
 | `maintenance/mqttConnectionState` | read | `online` / `offline` (set in `mqtt:`) |
-| `maintenance/log` | read | log lines (set in `mqtt:`) |
+| `maintenance/log` | read | log lines, with `mqtt_log` |
 | `maintenance/reset` | write | `1` restarts the ESP32 |
 | `info/nukiHubVersion`, `info/nukiHubBuild`, `info/nukiHubIp` | read | this component's version, the ESPHome version, the IP address |
 
 ## Command queue and results
+
+Results are published retained, like Nuki Hub does, and reset to `--` when the ESP32 connects
+to the broker.
 
 Only one command at a time can travel over the Bluetooth link. Commands that arrive while
 another one is running wait in a queue (24 deep) and are answered one after the other, in the

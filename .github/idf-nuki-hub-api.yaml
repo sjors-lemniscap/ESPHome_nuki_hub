@@ -1,0 +1,34 @@
+# The Opener as a lock entity through the ESPHome API only, without MQTT
+esphome:
+  name: test-nuki-hub-api
+
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: "test"
+  password: "test1234"
+
+api:
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: "../components/"
+
+esp32_ble_tracker:
+
+nuki_hub:
+  - id: opener
+    type: opener
+    topic_prefix: door
+    pairing_mode_at_boot: true
+
+lock:
+  - platform: nuki_hub
+    nuki_hub_id: opener
+    name: Opener

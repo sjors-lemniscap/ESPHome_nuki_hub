@@ -179,10 +179,16 @@ bool NukiHubLock::queue_action(const std::string &text) {
   const LockAction action = (LockAction) value;
   Operation op;
   op.name = "lock action";
-  op.step = [this, action] {
+  auto started = std::make_shared<bool>(false);
+  op.step = [this, action, started] {
+    if (!*started) {
+      // Only what the lock pushes during this action counts as its outcome
+      *started = true;
+      this->nuki_lock_.clear_pushed_key_turner_state();
+    }
     CmdResult result = this->nuki_lock_.lock_action(action, 1, 0);
     if (result != CmdResult::Working) {
-      this->publish_("/commandResult", result_to_string(result), false);
+      this->publish_("/commandResult", result_to_string(result));
     }
     return result;
   };
@@ -204,13 +210,12 @@ bool NukiHubLock::queue_action(const std::string &text) {
       this->want_state_ = true;
     }
   };
-  this->nuki_lock_.clear_pushed_key_turner_state();
   size_t position = 0;
   while (position < this->queue_.size() && strcmp(this->queue_[position].name, "lock action") == 0) {
     position++;
   }
   if (this->queue_.size() >= MAX_QUEUE) {
-    this->publish_("/commandResult", "busy", false);
+    this->publish_("/commandResult", "busy");
     return true;
   }
   this->queue_.insert(this->queue_.begin() + position, std::move(op));
@@ -341,7 +346,7 @@ void NukiHubLock::publish_advanced_config_() {
 
 void NukiHubLock::handle_config_action(const std::string &payload) {
   JsonDocument result;
-  auto answer = [this, &result] { this->publish_json_("/configuration/commandResult", result, false); };
+  auto answer = [this, &result] { this->publish_json_("/configuration/commandResult", result); };
 
   if (!this->config_valid_ || !this->advanced_config_valid_) {
     result["general"] = "configNotReady";
@@ -574,7 +579,7 @@ void NukiHubLock::handle_config_action(const std::string &payload) {
         return;
       }
       (*pending)["general"] = *changed ? "success" : "noChange";
-      this->publish_json_("/configuration/commandResult", *pending, false);
+      this->publish_json_("/configuration/commandResult", *pending);
       this->want_config_ = true;
     };
     this->enqueue(std::move(op));
@@ -680,7 +685,7 @@ void NukiHubLock::publish_time_control_() {
 }
 
 void NukiHubLock::handle_time_control_action(const std::string &payload) {
-  auto answer = [this](const char *text) { this->publish_("/timecontrol/commandResult", text, false); };
+  auto answer = [this](const char *text) { this->publish_("/timecontrol/commandResult", text); };
 
   if (!this->pin_valid_) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
@@ -774,7 +779,7 @@ void NukiHubLock::handle_time_control_action(const std::string &payload) {
     }
   }
   op.done = [this](CmdResult result) {
-    this->publish_("/timecontrol/commandResult", result_to_string(result), false);
+    this->publish_("/timecontrol/commandResult", result_to_string(result));
     this->want_time_control_ = true;
   };
   this->enqueue(std::move(op));

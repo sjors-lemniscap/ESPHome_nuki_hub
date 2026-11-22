@@ -27,9 +27,6 @@ time:
 mqtt:
   broker: 192.168.1.10
   discovery: false
-  log_topic:
-    topic: door/maintenance/log
-    level: INFO
 
 external_components:
   - source:
@@ -46,6 +43,7 @@ nuki_hub:
     time_id: sntp_time
     update_time: true
     pairing_mode_at_boot: true
+    mqtt_log: INFO
   - id: smartlock
     type: lock
     topic_prefix: room

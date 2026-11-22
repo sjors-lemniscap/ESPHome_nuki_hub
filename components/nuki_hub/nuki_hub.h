@@ -94,6 +94,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_ble_command_timeout(uint32_t ms) { this->ble_command_timeout_ = ms; }
   void set_update_time(bool enabled) { this->update_time_ = enabled; }
   void set_publish_maintenance(bool enabled) { this->maintenance_enabled_ = enabled; }
+  void set_mqtt_log_level(uint8_t level) { this->mqtt_log_level_ = level; }
   void set_debug(bool connect, bool communication, bool readable_data, bool hex_data, bool command) {
     this->debug_connect_ = connect;
     this->debug_communication_ = communication;
@@ -149,6 +150,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// Ends an attempt that waits for a connection or an answer for too long
   CmdResult check_attempt_deadline_(uint32_t now);
   void check_beacon_age_();
+  void on_log_(uint8_t level, const char *message, size_t length);
 
   std::string topic_(const char *suffix) const;
   std::string hub_topic_(const char *suffix) const;
@@ -214,6 +216,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   uint32_t ble_command_timeout_{3000};
   bool update_time_{false};
   bool maintenance_enabled_{true};
+  uint8_t mqtt_log_level_{0};
+  std::string log_topic_;
+  bool in_log_{false};
   bool debug_connect_{false}, debug_communication_{false}, debug_readable_data_{false}, debug_hex_data_{false},
       debug_command_{false};
 #ifdef USE_TIME

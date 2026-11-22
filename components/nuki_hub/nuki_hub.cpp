@@ -12,6 +12,9 @@
 #ifdef USE_WIFI
 #include "esphome/components/wifi/wifi_component.h"
 #endif
+#ifdef USE_LOGGER
+#include "esphome/components/logger/logger.h"
+#endif
 
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -81,6 +84,16 @@ void NukiHubComponent::setup() {
     uint8_t none = RESTART_REASON_NONE;
     this->restart_reason_pref_.save(&none);
   }
+
+#ifdef USE_LOGGER
+  if (this->mqtt_log_level_ > 0 && logger::global_logger != nullptr) {
+    this->log_topic_ = this->hub_topic_("/maintenance/log");
+    logger::global_logger->add_log_callback(
+        this, [](void *self, uint8_t level, const char *tag, const char *message, size_t message_len) {
+          static_cast<NukiHubComponent *>(self)->on_log_(level, message, message_len);
+        });
+  }
+#endif
 
   NukiBle *ble = this->ble();
   ble->set_debug_connect(this->debug_connect_);
@@ -189,15 +202,44 @@ std::string NukiHubComponent::topic_(const char *suffix) const {
 std::string NukiHubComponent::hub_topic_(const char *suffix) const { return this->topic_prefix_ + suffix; }
 
 #ifdef USE_MQTT
-static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain) {
+static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos = 1) {
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
     return false;
   }
-  return mqtt::global_mqtt_client->publish(topic, payload, length, 1, retain);
+  return mqtt::global_mqtt_client->publish(topic, payload, length, qos, retain);
 }
 #else
-static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain) { return false; }
+static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos = 1) {
+  return false;
+}
 #endif
+
+// Nuki Hub's "MQTT logging": every log line as one message, without the colour codes of the
+// serial log
+void NukiHubComponent::on_log_(uint8_t level, const char *message, size_t length) {
+  if (level > this->mqtt_log_level_ || this->in_log_) {
+    return;
+  }
+  this->in_log_ = true;
+  char line[256];
+  size_t n = 0;
+  for (size_t i = 0; i < length && n < sizeof(line); i++) {
+    if (message[i] == 0x1b) {
+      while (i < length && message[i] != 'm') {
+        i++;
+      }
+      continue;
+    }
+    if (message[i] == '\r' || message[i] == '\n') {
+      continue;
+    }
+    line[n++] = message[i];
+  }
+  if (n > 0) {
+    mqtt_publish(this->log_topic_, line, n, false, 0);
+  }
+  this->in_log_ = false;
+}
 
 bool NukiHubComponent::publish_(const char *suffix, const std::string &payload, bool retain) {
   return mqtt_publish(this->topic_(suffix), payload.c_str(), payload.size(), retain);
@@ -535,7 +577,7 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
   }
 
   if (result != CmdResult::Success) {
-    ESP_LOGW(TAG, "%s: %s", this->op_.name, result_to_string(result));
+    ESP_LOGD(TAG, "%s: %s", this->op_.name, result_to_string(result));
     if (this->consecutive_failures_ >= 5) {
       this->set_available_(false);
     }
@@ -845,7 +887,7 @@ void NukiHubComponent::publish_keypad_() {
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
   if (!this->is_paired()) {
-    this->publish_("/keypad/commandResultJson", "notPaired", false);
+    this->publish_("/keypad/commandResultJson", "notPaired");
     return;
   }
   auto cmd = std::make_shared<KeypadCommand>();
@@ -857,7 +899,7 @@ void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
   op.done = [this, cmd](CmdResult result) { this->keypad_command_done_(*cmd, result); };
 
   if (this->queue_.size() >= MAX_QUEUE) {
-    this->publish_("/keypad/commandResultJson", "busy", false);
+    this->publish_("/keypad/commandResultJson", "busy");
     return;
   }
   this->keypad_commands_pending_++;
@@ -869,6 +911,9 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
     this->keypad_commands_pending_--;
   }
   const char *text = cmd.verdict != nullptr ? cmd.verdict : result_to_string(result);
+  if (cmd.verdict != nullptr) {
+    ESP_LOGI(TAG, "Keypad command not executed: %s", cmd.verdict);
+  }
   if (cmd.verdict == nullptr) {
     ESP_LOGI(TAG, "%s keypad code: %s", cmd.action.c_str(), text);
     if (result == CmdResult::Success) {
@@ -914,7 +959,7 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
       this->keypad_refresh_at_ = 1;
     }
   }
-  this->publish_("/keypad/commandResultJson", text, false);
+  this->publish_("/keypad/commandResultJson", text);
 }
 
 // Fills the date and time fields `prefix`Year..Sec of a packed entry from six values
@@ -1217,7 +1262,7 @@ void NukiHubComponent::publish_auth_() {
 }
 
 void NukiHubComponent::handle_auth_action_(const std::string &payload) {
-  auto answer = [this](const char *text) { this->publish_("/authorization/commandResult", text, false); };
+  auto answer = [this](const char *text) { this->publish_("/authorization/commandResult", text); };
 
   if (!this->pin_valid_) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
@@ -1353,7 +1398,7 @@ void NukiHubComponent::handle_auth_action_(const std::string &payload) {
     op.step = [this, e] { return this->ble()->update_authorization_entry(e); };
   }
   op.done = [this](CmdResult result) {
-    this->publish_("/authorization/commandResult", result_to_string(result), false);
+    this->publish_("/authorization/commandResult", result_to_string(result));
     this->want_auth_ = true;
   };
   this->enqueue(std::move(op));
