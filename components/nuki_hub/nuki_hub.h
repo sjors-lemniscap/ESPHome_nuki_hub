@@ -234,6 +234,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// Ends an attempt that waits for a connection or an answer for too long
   CmdResult check_attempt_deadline_(uint32_t now);
   void check_beacon_age_();
+  void do_unpair_();
   void on_log_(uint8_t level, const char *message, size_t length);
 
   std::string topic_(const char *suffix) const;
@@ -397,6 +398,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   static const uint32_t ATTEMPT_DEADLINE_MS = 90000;
   static const int64_t BEACON_TIMEOUT_MS = 180000;
   uint32_t attempt_started_{0};
+  bool unpair_requested_{false};
   bool attempt_connected_{false};
   bool beacon_lost_{false};
   uint32_t last_beacon_check_{0};

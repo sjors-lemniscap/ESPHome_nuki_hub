@@ -831,7 +831,10 @@ void NukiHubComponent::loop() {
   const bool busy = this->op_active_ && !this->op_retry_pending_;
   // Every step of a command waits for an answer of the device. Looking for it often keeps
   // that wait short, so while a command runs the loop is asked to run without its usual pause.
-  if (busy || !this->queue_.empty()) {
+  if (this->unpair_requested_) {
+    this->do_unpair_();
+  }
+  if (ble->is_paired_with_lock() && (busy || !this->queue_.empty())) {
     this->high_frequency_.start();
   } else {
     this->high_frequency_.stop();
@@ -979,10 +982,20 @@ void NukiHubComponent::set_pairing_mode(bool enabled) {
   this->state_callback_.call();
 }
 
-void NukiHubComponent::unpair() {
+// Takes effect in loop(): it may be asked for from within a running command (an automation
+// reacting to something that command published).
+void NukiHubComponent::unpair() { this->unpair_requested_ = true; }
+
+void NukiHubComponent::do_unpair_() {
+  this->unpair_requested_ = false;
   this->ble()->disconnect();
   this->ble()->abort_command();
   this->ble()->unpair_nuki();
+  this->pin_valid_ = false;
+  this->pin_checked_ = false;
+  this->keypad_cache_valid_ = false;
+  this->keypad_entries_.clear();
+  this->auth_entries_.clear();
   // Whatever was running or waiting gets its answer, so counters and batches come out even
   std::deque<Operation> dropped;
   dropped.swap(this->queue_);
@@ -997,8 +1010,10 @@ void NukiHubComponent::unpair() {
       op.done(CmdResult::NotPaired);
     }
   }
-  this->pin_valid_ = false;
-  this->pin_checked_ = false;
+  // Nothing an answer may have queued is of use without a pairing
+  this->queue_.clear();
+  this->keypad_refresh_at_ = 0;
+  this->log_refresh_at_ = 0;
   this->set_available_(false);
   ESP_LOGI(TAG, "Pairing removed");
 }

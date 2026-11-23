@@ -602,6 +602,7 @@ void NukiHubLock::handle_config_action(const std::string &payload) {
       (*pending)["general"] = *changed ? "success" : "noChange";
       this->publish_json_("/configuration/commandResult", *pending);
       // The next command is compared with what the lock reports, not with what was true before
+      this->want_config_ = true;
       this->enqueue(this->make_config_operation(), true);
     };
     this->enqueue(std::move(op));

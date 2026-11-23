@@ -965,14 +965,14 @@ void NukiLock::handle_return_message(Command returnCode, unsigned char* data, ui
     }
     case Command::TimeControlEntry : {
       print_buffer((uint8_t*)data, dataLen, false, "timeControlEntry", this->debug_nuki_hex_data_);
-      TimeControlEntry timeControlEntry;
+      TimeControlEntry timeControlEntry{};
       memcpy(&timeControlEntry, data, std::min<size_t>(dataLen, sizeof(timeControlEntry)));
       this->list_of_time_control_entries_.push_back(timeControlEntry);
       break;
     }
     case Command::LogEntry : {
       print_buffer((uint8_t*)data, dataLen, false, "logEntry", this->debug_nuki_hex_data_);
-      LogEntry logEntry;
+      LogEntry logEntry{};
       memcpy(&logEntry, data, std::min<size_t>(dataLen, sizeof(logEntry)));
       this->list_of_log_entries_.push_back(logEntry);
       if (this->debug_nuki_readable_data_) {
@@ -982,7 +982,7 @@ void NukiLock::handle_return_message(Command returnCode, unsigned char* data, ui
     }
     case Command::InternalLogEntry : {
       print_buffer((uint8_t*)data, dataLen, false, "internalLogEntry", this->debug_nuki_hex_data_);
-      InternalLogEntry internalLogEntry;
+      InternalLogEntry internalLogEntry{};
       memcpy(&internalLogEntry, data, std::min<size_t>(dataLen, sizeof(internalLogEntry)));
       this->list_of_internal_log_entries_.push_back(internalLogEntry);
       if (this->debug_nuki_readable_data_) {
@@ -1007,7 +1007,7 @@ void NukiLock::handle_return_message(Command returnCode, unsigned char* data, ui
     }
     case Command::WifiScanEntry : {
       print_buffer((uint8_t*)data, dataLen, false, "wifiScanEntry", this->debug_nuki_hex_data_);
-      WifiScanEntry wifiScanEntry;
+      WifiScanEntry wifiScanEntry{};
       memcpy(&wifiScanEntry, data, std::min<size_t>(dataLen, sizeof(wifiScanEntry)));
       this->list_of_wifi_scan_entries_.push_back(wifiScanEntry);
       if (this->debug_nuki_readable_data_) {

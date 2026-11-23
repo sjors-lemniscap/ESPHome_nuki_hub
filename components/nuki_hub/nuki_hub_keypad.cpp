@@ -202,8 +202,14 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
       }
     }
     // Read the list back from the device once the commands are through
+    if (result != CmdResult::Success && result != CmdResult::Failed) {
+      // No answer: the command may or may not have reached the device. What is known of the
+      // keypad is no longer certain until it has been read again.
+      this->keypad_cache_valid_ = false;
+    }
     uint32_t delay = 500;
-    if (this->keypad_fast_list_ && this->keypad_cache_valid_ && this->keypad_commands_pending_ == 0) {
+    if (this->keypad_fast_list_ && this->keypad_cache_valid_ && this->keypad_commands_pending_ == 0 &&
+        result == CmdResult::Success) {
       // Every change is known from the answers of the device: publish the list as it must be
       // now, and read it back a little later to confirm it and to get the dates of new entries
       this->publish_keypad_();
@@ -767,7 +773,7 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
       }
       if (existing == nullptr) {
         if (!entry["timeLimited"].is<JsonVariantConst>() &&
-            (entry["allowedFrom"].is<JsonVariantConst>() || entry["allowedUntil"].is<JsonVariantConst>())) {
+            (!util::as_text(entry["allowedFrom"]).empty() || !util::as_text(entry["allowedUntil"]).empty())) {
           command["timeLimited"] = 1;
         }
         command["action"] = "add";
@@ -777,8 +783,8 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
         // flag or date can be written in more than one way
         const bool wants_limit = entry["timeLimited"].is<JsonVariantConst>()
                                      ? entry["timeLimited"].as<unsigned int>() == 1
-                                     : (entry["allowedFrom"].is<JsonVariantConst>() ||
-                                        entry["allowedUntil"].is<JsonVariantConst>() || existing->timeLimited == 1);
+                                     : (!util::as_text(entry["allowedFrom"]).empty() ||
+                                        !util::as_text(entry["allowedUntil"]).empty() || existing->timeLimited == 1);
         // A date without "timeLimited" means a time limit, the command says so explicitly
         command["timeLimited"] = wants_limit ? 1 : 0;
         bool differs = (existing->timeLimited == 1) != wants_limit;
@@ -884,9 +890,14 @@ bool NukiHubComponent::keypad_entry_expired_(const KeypadEntry &entry) {
 void NukiHubComponent::delete_expired_keypad_entries_() {
 #ifdef USE_TIME
   // Not while anything else is waiting: a command in the queue may be about to extend an entry
-  if (this->keypad_delete_expired_after_ == 0 || this->keypad_commands_pending_ > 0 || !this->queue_.empty() ||
-      (int32_t) (millis() - this->keypad_expiry_not_before_) < 0) {
+  if (this->keypad_delete_expired_after_ == 0 || this->keypad_commands_pending_ > 0 || !this->queue_.empty()) {
     return;
+  }
+  if (this->keypad_expiry_not_before_ != 0) {
+    if ((int32_t) (millis() - this->keypad_expiry_not_before_) < 0) {
+      return;
+    }
+    this->keypad_expiry_not_before_ = 0;
   }
   std::vector<std::string> commands;
   for (const auto &entry : this->keypad_entries_) {
@@ -913,6 +924,9 @@ void NukiHubComponent::delete_expired_keypad_entries_() {
   }
   // A delete that keeps failing must not be tried again with every read of the list
   this->keypad_expiry_not_before_ = millis() + 600000;
+  if (this->keypad_expiry_not_before_ == 0) {
+    this->keypad_expiry_not_before_ = 1;
+  }
   auto batch = this->start_keypad_batch_("", "/keypad/expiredResult", commands, millis());
   if (batch) {
     batch->summary["reason"] = "expired";
