@@ -687,6 +687,13 @@ Operation NukiHubLock::make_time_control_operation() {
     std::sort(this->time_control_entries_.begin(), this->time_control_entries_.end(),
               [](const TimeControlEntry &a, const TimeControlEntry &b) { return a.entryId < b.entryId; });
     this->publish_time_control_();
+    std::vector<std::pair<uint32_t, std::string>> switches;
+    char label[40];
+    for (const auto &entry : this->time_control_entries_) {
+      snprintf(label, sizeof(label), "Time control %u - %02u:%02u", entry.entryId, entry.timeHour, entry.timeMin);
+      switches.emplace_back(entry.entryId, label);
+    }
+    this->publish_time_control_switches_(switches);
   };
   return op;
 }

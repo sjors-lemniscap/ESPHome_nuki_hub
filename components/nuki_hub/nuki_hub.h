@@ -101,6 +101,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void setup() override;
   void loop() override;
   void dump_config() override;
+  void on_shutdown() override;
   float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
 
   void notify(nuki_lock::EventType event_type) override;
@@ -246,13 +247,15 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// What a Home Assistant lock sends to lock, unlock and open, and whether the device rings
   virtual void describe_for_discovery(JsonObject lock) = 0;
   virtual bool has_ring() const { return false; }
-  /// A setting announced to Home Assistant: a switch, or a number when max > min
+  /// A setting announced to Home Assistant: a switch, a number when max > min, a select with options
   struct DiscoverySetting {
     const char *key;
     const char *name;
     bool advanced;
     int32_t min;
     int32_t max;
+    /// The choices of a select, by the names the configuration topics use
+    std::vector<const char *> options{};
   };
   virtual std::vector<DiscoverySetting> discovery_settings() const { return {}; }
 
@@ -371,6 +374,28 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   std::vector<uint16_t> keypad_published_ids_;
   std::map<uint16_t, uint32_t> keypad_published_hashes_;
   bool keypad_entries_published_{false};
+  bool keypad_entries_more_{false};
+  uint32_t keypad_entries_at_{0};
+  bool interrupted_{false};
+  bool last_publish_too_large_{false};
+  uint8_t keypad_pages_published_{0};
+  /// Switches in Home Assistant for the entries of a list (authorizations, time control)
+  struct ListSwitches {
+    const char *kind;         // "auth", "timecontrol": part of the entity's id
+    const char *list_topic;   // the list the state is read from
+    const char *id_field;
+    const char *command_topic;
+    std::vector<uint32_t> published;
+    std::map<uint32_t, uint32_t> hashes;
+    bool listed{false};
+  };
+  ListSwitches auth_switches_{"auth", "/authorization/json", "authId", "/authorization/action"};
+  ListSwitches time_control_switches_{"timecontrol", "/timecontrol/json", "entryId", "/timecontrol/action"};
+  void publish_list_switches_(ListSwitches &list, const std::vector<std::pair<uint32_t, std::string>> &entries);
+  void publish_list_switch_(ListSwitches &list, uint32_t id, const std::string &name, bool remove);
+  void publish_time_control_switches_(const std::vector<std::pair<uint32_t, std::string>> &entries) {
+    this->publish_list_switches_(this->time_control_switches_, entries);
+  }
   std::string discovery_device_name_;
   bool discovery_scan_active_{false};
   uint32_t discovery_nuki_id_{0};

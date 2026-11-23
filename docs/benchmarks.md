@@ -81,10 +81,10 @@ take at once now wait in the component and go out in order.
 | | with PSRAM | without |
 | --- | --- | --- |
 | Sync that adds 80 entries (two parts of 50 and 30) | 22.0 s, 275 ms each | 21.6 s, 270 ms each |
-| List read, 25.6 kB | 220 ms | not published, too large |
+| List read, 25.6 kB | 220 ms | 4.7 s, in 9 pages |
 | Single add / update / delete with all there | 459 / 985 / 295 ms | 931 / 271 / 322 ms |
 | Sync that removes them | 22.7 s | 23.1 s |
-| Lowest free internal RAM | 94 kB | 7 kB |
+| Lowest free internal RAM | 88 kB | 32 kB |
 
 ## Not measured
 

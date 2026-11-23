@@ -46,20 +46,7 @@ class NukiHubOpener : public NukiHubComponent {
   std::string state_text() const override;
   void describe_for_discovery(JsonObject lock) override;
   bool has_ring() const override { return true; }
-  std::vector<DiscoverySetting> discovery_settings() const override {
-    return {
-        {"ledFlashEnabled", "LED enabled", false, 0, 0},
-        {"buttonEnabled", "Button enabled", false, 0, 0},
-        {"soundConfirmation", "Sound confirmation", true, 0, 0},
-        {"disableRtoAfterRing", "Disable RTO after ring", true, 0, 0},
-        {"randomElectricStrikeDelay", "Random electric strike delay", true, 0, 0},
-        {"soundLevel", "Sound level", true, 0, 255},
-        {"rtoTimeout", "RTO timeout", true, 5, 60},
-        {"electricStrikeDelay", "Electric strike delay", true, 0, 30000},
-        {"electricStrikeDuration", "Electric strike duration", true, 1000, 30000},
-        {"doorbellSuppressionDuration", "Doorbell suppression duration", true, 500, 10000},
-    };
-  }
+  std::vector<DiscoverySetting> discovery_settings() const override;
 
   void publish_state_();
   void publish_config_();

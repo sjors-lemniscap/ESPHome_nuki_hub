@@ -1,5 +1,7 @@
 #include "nuki_hub.h"
 
+#include "esp_heap_caps.h"
+
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -83,6 +85,38 @@ void NukiHubComponent::publish_keypad_() {
     keypad_entry_to_json(entry, list.add<JsonObject>(), this->keypad_publish_code_);
   }
   this->publish_json_("/keypad/json", doc);
+  // A list too large for the memory of this board goes out in pages of 10 entries,
+  // keypad/page/<n>, with their number on keypad/pages
+  uint8_t pages = 0;
+  if (this->last_publish_too_large_) {
+    char topic[24];
+    const size_t count = this->keypad_entries_.size();
+    for (size_t first = 0; first < count; first += 10) {
+      // One after the other with time for the MQTT client in between: all at once is as
+      // much in its queue as the whole list would have been
+      const uint8_t number = pages++;
+      // By number, not by a name in a buffer that the next round overwrites
+      this->set_timeout(0x4B500000u + number, 50 + 250 * number, [this, first, number] {
+        JsonDocument page(json_memory());
+        JsonArray part = page.to<JsonArray>();
+        for (size_t i = first; i < this->keypad_entries_.size() && i < first + 10; i++) {
+          keypad_entry_to_json(this->keypad_entries_[i], part.add<JsonObject>(), this->keypad_publish_code_);
+        }
+        char page_topic[24];
+        snprintf(page_topic, sizeof(page_topic), "/keypad/page/%u", number);
+        this->publish_json_(page_topic, page);
+      });
+    }
+  }
+  if (pages > 0 || this->keypad_pages_published_ > 0) {
+    char topic[24];
+    for (uint8_t page = pages; page < this->keypad_pages_published_; page++) {
+      snprintf(topic, sizeof(topic), "/keypad/page/%u", page);
+      this->publish_(topic, "");
+    }
+    this->publish_int_("/keypad/pages", pages);
+    this->keypad_pages_published_ = pages;
+  }
   this->publish_int_("/keypad/count", this->keypad_entries_.size());
   this->update_entities_();
   if (this->keypad_topic_per_entry_) {
@@ -95,8 +129,17 @@ void NukiHubComponent::publish_keypad_() {
 void NukiHubComponent::publish_keypad_entries_() {
   std::vector<uint16_t> current;
   char topic[40];
+  // A few at a time, and only with memory to spare: every message waits in the internal RAM
+  // until the broker has it, a keypad with 80 entries is 160 of them. loop() comes back for
+  // the rest; what was published is skipped by its hash.
+  uint8_t budget = 6;
+  this->keypad_entries_more_ = false;
+  this->keypad_entries_at_ = millis();
   for (const auto &entry : this->keypad_entries_) {
     current.push_back(entry.codeId);
+    if (this->keypad_entries_more_) {
+      continue;
+    }
     JsonDocument doc(json_memory());
     JsonObject json = doc.to<JsonObject>();
     keypad_entry_to_json(entry, json, this->keypad_publish_code_);
@@ -109,6 +152,11 @@ void NukiHubComponent::publish_keypad_entries_() {
     if (known != this->keypad_published_hashes_.end() && known->second == hash) {
       continue;
     }
+    if (budget == 0 || this->outbox_.size() >= 16 || heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40000) {
+      this->keypad_entries_more_ = true;
+      continue;
+    }
+    budget--;
     this->keypad_published_hashes_[entry.codeId] = hash;
     snprintf(topic, sizeof(topic), "/keypad/codes/%u", entry.codeId);
     this->publish_(topic, out);

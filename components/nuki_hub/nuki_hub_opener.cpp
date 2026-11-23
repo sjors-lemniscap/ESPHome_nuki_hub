@@ -176,6 +176,39 @@ void NukiHubOpener::describe_for_discovery(JsonObject lock) {
   lock["payload_open"] = "electricStrikeActuation";
 }
 
+template<size_t N> static std::vector<const char *> names_of(const Name (&table)[N]) {
+  std::vector<const char *> names;
+  for (const auto &entry : table) {
+    names.push_back(entry.text);
+  }
+  return names;
+}
+
+std::vector<NukiHubComponent::DiscoverySetting> NukiHubOpener::discovery_settings() const {
+  return {
+      {"ledFlashEnabled", "LED enabled", false, 0, 0},
+      {"buttonEnabled", "Button enabled", false, 0, 0},
+      {"soundConfirmation", "Sound confirmation", true, 0, 0},
+      {"disableRtoAfterRing", "Disable RTO after ring", true, 0, 0},
+      {"randomElectricStrikeDelay", "Random electric strike delay", true, 0, 0},
+      {"soundLevel", "Sound level", true, 0, 255},
+      {"rtoTimeout", "RTO timeout", true, 5, 60},
+      {"electricStrikeDelay", "Electric strike delay", true, 0, 30000},
+      {"electricStrikeDuration", "Electric strike duration", true, 1000, 30000},
+      {"doorbellSuppressionDuration", "Doorbell suppression duration", true, 500, 10000},
+      {"soundRing", "Sound ring", true, 0, 0, names_of(SOUNDS)},
+      {"soundOpen", "Sound open", true, 0, 0, names_of(SOUNDS)},
+      {"soundRto", "Sound RTO", true, 0, 0, names_of(SOUNDS)},
+      {"soundCm", "Sound continuous mode", true, 0, 0, names_of(SOUNDS)},
+      {"doorbellSuppression", "Doorbell suppression", true, 0, 0, names_of(DOORBELL_SUPPRESSION)},
+      {"singleButtonPressAction", "Single button press", true, 0, 0, names_of(BUTTON_PRESS_ACTIONS)},
+      {"doubleButtonPressAction", "Double button press", true, 0, 0, names_of(BUTTON_PRESS_ACTIONS)},
+      {"fobAction1", "Fob action 1", false, 0, 0, names_of(FOB_ACTIONS)},
+      {"fobAction2", "Fob action 2", false, 0, 0, names_of(FOB_ACTIONS)},
+      {"fobAction3", "Fob action 3", false, 0, 0, names_of(FOB_ACTIONS)},
+  };
+}
+
 lock::LockState NukiHubOpener::entity_state() const {
   if (!this->state_known_) {
     return lock::LOCK_STATE_NONE;
@@ -688,6 +721,13 @@ Operation NukiHubOpener::make_time_control_operation() {
     std::sort(this->time_control_entries_.begin(), this->time_control_entries_.end(),
               [](const opener::TimeControlEntry &a, const opener::TimeControlEntry &b) { return a.entryId < b.entryId; });
     this->publish_time_control_();
+    std::vector<std::pair<uint32_t, std::string>> switches;
+    char label[40];
+    for (const auto &entry : this->time_control_entries_) {
+      snprintf(label, sizeof(label), "Time control %u - %02u:%02u", entry.entryId, entry.timeHour, entry.timeMin);
+      switches.emplace_back(entry.entryId, label);
+    }
+    this->publish_time_control_switches_(switches);
   };
   return op;
 }

@@ -403,6 +403,7 @@ bool NukiHubComponent::publish_int_(const char *suffix, int64_t value, bool reta
 bool NukiHubComponent::publish_json_(const char *suffix, JsonDocument &doc, bool retain) {
   // Written once into a buffer of the right size, in PSRAM where there is one. Without the
   // memory for it nothing is published: better than the abort a failed std::string would be.
+  this->last_publish_too_large_ = false;
   const size_t length = measureJson(doc);
   // The MQTT client and the API each copy a message into the internal RAM to send it. A list
   // too large for what is free there is left out, the commands keep working without it.
@@ -411,6 +412,7 @@ bool NukiHubComponent::publish_json_(const char *suffix, JsonDocument &doc, bool
   if (length > 4096 && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < (psram ? 2 : 3) * length + 24576) {
     ESP_LOGE(TAG, "%s is too large to publish (%u bytes, %u free)", suffix, (unsigned) length,
              (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    this->last_publish_too_large_ = true;
     return false;
   }
   RAMAllocator<char> allocator;
@@ -605,16 +607,27 @@ void NukiHubComponent::register_handlers_() {
     uint8_t reason = RESTART_REASON_MQTT;
     this->restart_reason_pref_.save(&reason);
     global_preferences->sync();
-    // Commands that will not be executed anymore get an answer instead of silence
-    std::deque<Operation> dropped;
-    dropped.swap(this->queue_);
-    for (auto &op : dropped) {
-      if (op.done) {
-        op.done(CmdResult::Error);
-      }
-    }
     this->set_timeout("restart", 500, [] { App.safe_reboot(); });
   });
+}
+
+// A restart that was asked for (the reset topic, a firmware update, ESPHome's own reasons):
+// commands that will not be executed anymore get an answer instead of silence
+void NukiHubComponent::on_shutdown() {
+  this->interrupted_ = true;
+  std::deque<Operation> dropped;
+  dropped.swap(this->queue_);
+  if (this->op_active_ && this->op_.done) {
+    dropped.push_front(std::move(this->op_));
+  }
+  this->op_ = Operation{};
+  this->op_active_ = false;
+  for (auto &op : dropped) {
+    if (op.done) {
+      op.done(CmdResult::Error);
+    }
+  }
+  this->flush_outbox_();
 }
 
 bool NukiHubComponent::command(const std::string &topic, const std::string &payload) {
@@ -660,6 +673,8 @@ void NukiHubComponent::on_mqtt_connected_() {
   this->log_marker_deadline_ = millis() + 3000;
   this->discovery_published_ = false;
   this->keypad_published_hashes_.clear();
+  this->auth_switches_.hashes.clear();
+  this->time_control_switches_.hashes.clear();
 
   // What was read before the broker was there, or while it was away, was not published:
   // read everything again
@@ -859,7 +874,8 @@ void NukiHubComponent::publish_result_(const char *topic, const std::string &req
   if (!action.empty()) {
     json["action"] = action;
   }
-  json["result"] = result;
+  // What a restart cut off was not tried and failed, it was not done
+  json["result"] = this->interrupted_ && strcmp(result, "error") == 0 ? "interrupted" : result;
   if (refused_by_device) {
     const uint8_t code = this->ble()->get_last_error_code();
     json["error"] = error_name(code);
@@ -1101,6 +1117,9 @@ void NukiHubComponent::loop() {
   }
 #endif
   this->flush_outbox_();
+  if (this->keypad_entries_more_ && now - this->keypad_entries_at_ >= 150) {
+    this->publish_keypad_entries_();
+  }
   if (now - this->last_beacon_check_ >= 10000) {
     this->last_beacon_check_ = now;
     this->check_beacon_age_();
@@ -1471,6 +1490,71 @@ void NukiHubComponent::describe_availability_(JsonObject json) {
 #endif
 }
 
+// One switch per entry of a list that enables and disables it. The state is looked up in the
+// list by the entry's id. Switches of entries that are gone are removed.
+void NukiHubComponent::publish_list_switches_(ListSwitches &list,
+                                              const std::vector<std::pair<uint32_t, std::string>> &entries) {
+  if (this->discovery_prefix_.empty() || this->discovery_nuki_id_ == 0) {
+    return;
+  }
+  std::vector<uint32_t> current;
+  for (const auto &entry : entries) {
+    current.push_back(entry.first);
+    const uint32_t hash = fnv1_hash(entry.second);
+    auto known = list.hashes.find(entry.first);
+    if (known != list.hashes.end() && known->second == hash) {
+      continue;
+    }
+    list.hashes[entry.first] = hash;
+    this->publish_list_switch_(list, entry.first, entry.second, false);
+  }
+  for (uint32_t id : list.published) {
+    if (std::find(current.begin(), current.end(), id) == current.end()) {
+      this->publish_list_switch_(list, id, "", true);
+      list.hashes.erase(id);
+    }
+  }
+  list.published = std::move(current);
+  list.listed = true;
+}
+
+void NukiHubComponent::publish_list_switch_(ListSwitches &list, uint32_t id, const std::string &name, bool remove) {
+#ifdef USE_MQTT
+  char uid[24];
+  snprintf(uid, sizeof(uid), "nuki_%08" PRIx32, this->discovery_nuki_id_);
+  const std::string object = std::string(list.kind) + "_" + to_string(id);
+  const std::string topic = this->discovery_prefix_ + "/switch/" + uid + "_" + object + "/config";
+  if (remove) {
+    this->send_(topic, "", 0, true);
+    return;
+  }
+  const std::string base = this->topic_prefix_ + "/" + this->kind();
+  const std::string id_text = to_string(id);
+  JsonDocument doc(json_memory());
+  JsonObject json = doc.to<JsonObject>();
+  json["unique_id"] = std::string(uid) + "_" + object;
+  json["name"] = name;
+  json["entity_category"] = "config";
+  this->describe_availability_(json);
+  json["state_topic"] = base + list.list_topic;
+  json["value_template"] = std::string("{{ value_json | selectattr('") + list.id_field + "', 'eq', " + id_text +
+                           ") | map(attribute='enabled') | first | default(0) }}";
+  json["state_on"] = "1";
+  json["state_off"] = "0";
+  json["command_topic"] = base + list.command_topic;
+  const std::string command = std::string("{\"action\":\"update\",\"") + list.id_field + "\":" + id_text + ",\"enabled\":";
+  json["payload_on"] = command + "1}";
+  json["payload_off"] = command + "0}";
+  JsonObject device = json["device"].to<JsonObject>();
+  device["identifiers"].to<JsonArray>().add(uid);
+  device["name"] = this->discovery_device_name_;
+  device["manufacturer"] = "Nuki";
+  std::string out;
+  serializeJson(doc, out);
+  this->send_(topic, out.c_str(), out.size(), true);
+#endif
+}
+
 void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove) {
 #ifdef USE_MQTT
   if (this->discovery_prefix_.empty() || this->discovery_nuki_id_ == 0 || mqtt::global_mqtt_client == nullptr ||
@@ -1520,11 +1604,11 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
       !mqtt::global_mqtt_client->is_connected()) {
     return;
   }
-  if (this->keypad_topic_per_entry_ && !this->discovery_scan_active_) {
+  if (!this->discovery_scan_active_) {
     // Switches retained for entries that are gone, from before a restart or a lost connection
     this->discovery_scan_active_ = true;
     char prefix[32];
-    snprintf(prefix, sizeof(prefix), "nuki_%08" PRIx32 "_keypad_", nuki_id);
+    snprintf(prefix, sizeof(prefix), "nuki_%08" PRIx32 "_", nuki_id);
     const std::string own = prefix;
     const std::string scan_topic = this->discovery_prefix_ + "/switch/+/config";
     mqtt::global_mqtt_client->subscribe(
@@ -1535,19 +1619,41 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
           if (payload.empty() || start == std::string::npos || topic.compare(start + 1, own.size(), own) != 0) {
             return;
           }
-          const std::string id = topic.substr(start + 1 + own.size(), end - start - 1 - own.size());
-          if (!util::is_number(id) || id.size() > 5) {
+          // "<kind>_<id>"
+          const std::string object = topic.substr(start + 1 + own.size(), end - start - 1 - own.size());
+          const size_t split = object.rfind('_');
+          if (split == std::string::npos) {
             return;
           }
-          const uint16_t code_id = strtoul(id.c_str(), nullptr, 10);
-          if (std::find(this->keypad_published_ids_.begin(), this->keypad_published_ids_.end(), code_id) !=
-              this->keypad_published_ids_.end()) {
+          const std::string kind = object.substr(0, split);
+          const std::string id = object.substr(split + 1);
+          if (!util::is_number(id) || id.size() > 10) {
             return;
           }
-          if (this->keypad_entries_published_) {
-            this->publish_keypad_entry_discovery_(code_id, "", true);
-          } else {
-            this->keypad_published_ids_.push_back(code_id);
+          const uint32_t number = strtoul(id.c_str(), nullptr, 10);
+          if (kind == "keypad") {
+            const uint16_t code_id = number;
+            if (std::find(this->keypad_published_ids_.begin(), this->keypad_published_ids_.end(), code_id) !=
+                this->keypad_published_ids_.end()) {
+              return;
+            }
+            if (this->keypad_entries_published_ || !this->keypad_topic_per_entry_) {
+              this->publish_keypad_entry_discovery_(code_id, "", true);
+            } else {
+              this->keypad_published_ids_.push_back(code_id);
+            }
+            return;
+          }
+          for (ListSwitches *list : {&this->auth_switches_, &this->time_control_switches_}) {
+            if (kind != list->kind ||
+                std::find(list->published.begin(), list->published.end(), number) != list->published.end()) {
+              continue;
+            }
+            if (list->listed) {
+              this->publish_list_switch_(*list, number, "", true);
+            } else {
+              list->published.push_back(number);
+            }
           }
         },
         1);
@@ -1639,14 +1745,21 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
   // Settings: read from the configuration topics, written through configuration/action
   for (const auto &setting : this->discovery_settings()) {
     const bool number = setting.max > setting.min;
-    announce(number ? "number" : "switch", setting.key, [&](JsonObject json) {
+    const bool select = !setting.options.empty();
+    announce(select ? "select" : (number ? "number" : "switch"), setting.key, [&](JsonObject json) {
       const std::string key = setting.key;
       json["name"] = setting.name;
       json["entity_category"] = "config";
       json["state_topic"] = base + (setting.advanced ? "/configuration/advancedJson" : "/configuration/basicJson");
       json["value_template"] = "{{ value_json." + key + " }}";
       json["command_topic"] = base + "/configuration/action";
-      if (number) {
+      if (select) {
+        JsonArray options = json["options"].to<JsonArray>();
+        for (const char *option : setting.options) {
+          options.add(option);
+        }
+        json["command_template"] = "{\"" + key + "\":\"{{ value }}\"}";
+      } else if (number) {
         json["min"] = setting.min;
         json["max"] = setting.max;
         json["mode"] = "box";
@@ -1691,6 +1804,11 @@ Operation NukiHubComponent::make_auth_operation_() {
       entry.name[sizeof(entry.name) - 1] = 0;
     }
     this->publish_auth_();
+    std::vector<std::pair<uint32_t, std::string>> switches;
+    for (const auto &entry : this->auth_entries_) {
+      switches.emplace_back(entry.authId, "Authorization - " + util::fixed_string(entry.name, sizeof(entry.name)));
+    }
+    this->publish_list_switches_(this->auth_switches_, switches);
   };
   return op;
 }

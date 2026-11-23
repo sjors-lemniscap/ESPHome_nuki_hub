@@ -321,6 +321,9 @@ Only one command at a time can travel over the Bluetooth link. Commands that arr
 another one is running wait in a queue (64 deep) and are answered one after the other, in the
 order they arrived; lock actions go first. A command that gets no answer is retried
 (`command_retries`). A command the device refuses is answered with `failed` right away.
+Commands that a restart cuts off (the reset topic, a firmware update) are answered with
+`interrupted`; in a batch or sync the result is then `partial`. A crash or a power cut
+answers nothing.
 If the Nuki device cannot be reached within 10 seconds (another device holds its Bluetooth
 connection, or it just went out of range), the attempt ends with `timeOut` and is retried,
 but only once the device has been heard advertising again. A device that stays silent for 20
@@ -482,10 +485,15 @@ A sensor takes payloads that are a number, a binary sensor is on while the paylo
 
 ### Settings
 
-With MQTT discovery the main settings are announced as switches and numbers of the device
-(LED, button, sounds, timeouts; for a Smart Lock auto lock, night mode and durations).
-They read `configuration/basicJson` and `configuration/advancedJson` and write through
-`configuration/action`.
+With MQTT discovery the main settings are announced as switches, numbers and selects of
+the device (LED, button, sounds, timeouts, button and fob actions; for a Smart Lock auto
+lock, night mode and durations, no selects yet). They read `configuration/basicJson` and
+`configuration/advancedJson` and write through `configuration/action`.
+
+Every authorization and every time control entry is a switch that enables and disables it,
+like the keypad entries with `keypad_topic_per_entry`. Switches of entries that are gone
+are withdrawn, also those left from before a restart. Mind that the keypad and the apps are
+authorizations themselves: switching one off locks it out.
 
 ### Availability
 
@@ -538,6 +546,8 @@ command takes as long as over MQTT (about 210 ms), see [benchmarks](benchmarks.m
 `tools/fleet_generate.py rooms.json out/` writes the per-room files from a list of doors,
 makes an API key for each and the lines a client needs to reach them;
 `tools/fleet_update.sh` installs a build room by room, the first one as a canary.
+`tools/check_config.py room.yaml` names what is easy to get wrong before flashing (the
+last will, asynchronous sending, the API flags and key, options that need each other).
 
 ## Memory and large keypads
 
@@ -548,9 +558,12 @@ message while it is built, and messages waiting for the MQTT client.
 
 - **With PSRAM**: tested with 82 keypad entries (a 25 kB list), lowest free internal RAM
   94 kB.
-- **Without PSRAM**: all commands work with 80 entries, but a list too large for the free
-  RAM is not published (an error in the log says so) and at most 24 kB of messages wait
-  for the MQTT client. Up to about 40 entries the list is published.
+- **Without PSRAM**: tested with the same 82 entries, lowest free RAM 32 kB. A list too
+  large to publish in one message (from about 40 entries) goes out in pages of 10 instead:
+  `keypad/page/0` and following, with their number on `keypad/pages` (`0` while the list
+  fits `keypad/json`). At most 24 kB of messages wait for the MQTT client.
+- Per-entry topics and their switches are published a few at a time, with a look at the free
+  memory in between: after a start a keypad with 80 entries takes a few seconds to appear.
 - A sync changes at most 50 entries at a time, see [sync](#additions-to-nuki-hubs-topics).
 
 ## Security
@@ -623,6 +636,11 @@ Failure cases tried on the rig:
 - **Creating an authorization** and deleting it again.
 - **Builds**: Ethernet without Wi-Fi (Olimex ESP32-POE) and without PSRAM compile; the
   one without PSRAM also ran all checks on the rig.
+
+- **Selects, authorization and time control switches** from a real Home Assistant: a sound
+  changed and changed back, an entry of each list added, switched off and deleted, its
+  switch withdrawn.
+- **A firmware update during a sync** is answered: `partial`, with what was done.
 
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the

@@ -70,12 +70,29 @@ client.on('connect', async () => {
   check(`sync adds ${count} entries`, r.result.result === 'success' && !r.result.remaining && r.result.failed === 0,
     `${r.ms} ms in ${r.rounds} rounds, ${Math.round(r.ms / count)} ms per entry, ${JSON.stringify({ ...r.result, results: undefined })}`);
 
-  const listed = expect('/keypad/json', (j) => Array.isArray(j), 60000);
+  // A board without the memory for the whole list sends it in pages, keypad/page/<n>
+  const pagesSeen = {};
+  const onPage = (topic, payload) => {
+    const m = topic.match(/\/keypad\/page\/(\d+)$/);
+    if (m && payload.length) { try { pagesSeen[m[1]] = JSON.parse(payload.toString()); } catch { /* not a page */ } }
+  };
+  client.on('message', onPage);
+  const listed = expect('/keypad/json', (j) => Array.isArray(j), 20000);
+  const paged = expect('/keypad/pages', (j) => Number(j) > 0, 20000);
   const started = Date.now();
   client.publish(`${base}/query/keypad`, '1');
-  const list = await listed;
+  let list = await Promise.race([listed, paged.then((n) => (n ? null : new Promise(() => {})))]);
+  let how = 'one message';
+  if (!Array.isArray(list)) {
+    const pages = Number(await paged) || 0;
+    await new Promise((r) => setTimeout(r, 2000 + 300 * pages));
+    list = [];
+    for (let n = 0; n < pages; n++) list = list.concat(pagesSeen[n] || []);
+    how = `${pages} pages`;
+  }
+  client.off('message', onPage);
   check('list read with all entries', !!list && list.filter((e) => e.name.startsWith('largetest_')).length === count,
-    `${Date.now() - started} ms, ${list ? list.length : 0} entries, ${list ? JSON.stringify(list).length : 0} bytes`);
+    `${Date.now() - started} ms, ${list ? list.length : 0} entries in ${how}, ${list ? JSON.stringify(list).length : 0} bytes`);
 
   const times = { add: [], update: [], delete: [] };
   for (let i = 0; i < 5; i++) {
