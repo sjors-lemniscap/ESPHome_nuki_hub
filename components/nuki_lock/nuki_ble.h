@@ -444,6 +444,14 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      */
     virtual void abort_command();
 
+    /**
+     * @brief Ends the connection, or the wait for one. BLEClientBase forgets the address of a
+     * client it is asked to disconnect while that client still waits for its turn to connect
+     * (it does so for clients that connect to changing devices). This client always talks to
+     * the same device and would never find it again, so the address is kept.
+     */
+    void disconnect() override;
+
     /// The error code of the last error report of the device (see the ErrorCode enums)
     uint8_t get_last_error_code() const { return this->error_code_; }
     void set_last_error_code(uint8_t code) { this->error_code_ = code; }
@@ -519,6 +527,9 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     uint32_t command_timeout_duration_ = 3000;
     uint32_t action_timeout_duration_ = 15000;
     bool fast_connection_ = false;
+    // The address of the paired device, to restore it if the client base drops it
+    uint64_t paired_address_ = 0;
+    void save_paired_address_();
     // Kept (and still settable) for API compatibility with nuki_lock.cpp's setup(); no
     // longer consumed internally - BLEClientBase::connect() is a single non-blocking
     // attempt per call, and the existing execute_action()-driven retry-via-repeated-calls

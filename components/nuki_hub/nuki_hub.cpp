@@ -142,6 +142,8 @@ void NukiHubComponent::setup() {
   }
 
   this->register_handlers_();
+  this->need_beacon_ = true;
+  this->need_beacon_after_ = 0;
   this->setup_device();
   this->add_on_state_callback([this] { this->update_entities_(); });
   // Known from the start: nobody is ringing
@@ -787,7 +789,50 @@ bool NukiHubComponent::start_next_operation_() {
   return true;
 }
 
+// It is the same radio for all devices on this ESP32: while one of them connects or is
+// connected, none of them is heard advertising.
+uint8_t NukiHubComponent::radio_users_ = 0;
+
+// Whether to try to connect. After a connection could not be set up (and at the start), the
+// device first has to be heard advertising again: an attempt takes the radio for ten seconds,
+// from every device on this ESP32. If it stays silent while the radio listens, it is out of
+// range or without power, and commands are answered at once instead of after all retries.
+NukiHubComponent::Presence NukiHubComponent::presence_(uint32_t now) {
+  const int64_t beacon = this->ble()->get_last_received_beacon_ts();
+  const uint32_t elapsed = std::min<uint32_t>(now - this->presence_tick_, 1000);
+  this->presence_tick_ = now;
+  if (!this->need_beacon_) {
+    return Presence::PRESENT;
+  }
+  if (beacon > this->need_beacon_after_) {
+    this->need_beacon_ = false;
+    this->silent_listen_ms_ = 0;
+    return Presence::PRESENT;
+  }
+  if (radio_users_ == 0) {
+    this->silent_listen_ms_ += elapsed;
+  }
+  return this->silent_listen_ms_ > SILENT_MS ? Presence::SILENT : Presence::WAITING;
+}
+
+void NukiHubComponent::require_beacon_() {
+  this->need_beacon_ = true;
+  this->need_beacon_after_ = esp_timer_get_time() / 1000;
+  this->silent_listen_ms_ = 0;
+}
+
+void NukiHubComponent::end_attempt_() {
+  if (this->attempt_started_ == 0) {
+    return;
+  }
+  this->attempt_started_ = 0;
+  if (radio_users_ > 0) {
+    radio_users_--;
+  }
+}
+
 void NukiHubComponent::finish_operation_(CmdResult result) {
+  this->end_attempt_();
   // A refusal by the device (Failed) or missing pairing won't change by asking again
   const bool retryable = result != CmdResult::Success && result != CmdResult::Failed && result != CmdResult::NotPaired;
 
@@ -887,6 +932,7 @@ void NukiHubComponent::loop() {
       AuthorizationIdType type = this->pairing_as_app_ ? AuthorizationIdType::App : AuthorizationIdType::Bridge;
       if (ble->pair_nuki(type) == PairingResult::Success) {
         ESP_LOGI(TAG, "Paired with the Nuki %s", this->kind());
+        this->need_beacon_ = false;
         this->set_pairing_mode(false);
         if (this->security_pin_ != 0) {
           if (ble->is_lock_ultra()) {
@@ -932,12 +978,40 @@ void NukiHubComponent::loop() {
     return;
   }
 
+  const Presence presence = this->presence_(now);
+  if (presence == Presence::WAITING) {
+    return;
+  }
+  if (presence == Presence::SILENT) {
+    // What waits for an answer gets it now, the rest waits for the device to come back
+    if (this->op_retry_pending_ || !this->queue_.empty()) {
+      if (!this->op_retry_pending_) {
+        this->op_ = std::move(this->queue_.front());
+        this->queue_.pop_front();
+        this->op_active_ = true;
+        this->op_started_ = now;
+      }
+      this->op_retry_pending_ = false;
+      this->op_retries_left_ = 0;
+      if (!this->silent_logged_) {
+        this->silent_logged_ = true;
+        ESP_LOGW(TAG, "The %s is not advertising (out of range or without power), not trying to connect",
+                 this->kind());
+      }
+      this->set_available_(false);
+      this->finish_operation_(CmdResult::TimeOut);
+    }
+    return;
+  }
+  this->silent_logged_ = false;
+
   if (this->op_retry_pending_) {
     this->op_retry_pending_ = false;
   } else if (!this->start_next_operation_()) {
     return;
   }
-  this->attempt_started_ = now;
+  this->attempt_started_ = now == 0 ? 1 : now;
+  radio_users_++;
   this->attempt_connected_ = false;
   CmdResult result = this->op_.step();
   if (result != CmdResult::Working) {
@@ -957,6 +1031,7 @@ CmdResult NukiHubComponent::check_attempt_deadline_(uint32_t now) {
     ESP_LOGW(TAG, "%s: Send encr msg failed due to unable to connect", this->kind());
     ble->disconnect();
     ble->abort_command();
+    this->require_beacon_();
     return CmdResult::TimeOut;
   }
   if (elapsed > ATTEMPT_DEADLINE_MS) {
@@ -1024,6 +1099,7 @@ void NukiHubComponent::do_unpair_() {
   this->op_ = Operation{};
   this->op_active_ = false;
   this->op_retry_pending_ = false;
+  this->end_attempt_();
   for (auto &op : dropped) {
     if (op.done) {
       op.done(CmdResult::NotPaired);

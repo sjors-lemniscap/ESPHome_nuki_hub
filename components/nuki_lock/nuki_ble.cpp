@@ -174,6 +174,7 @@ PairingResult NukiBle::pair_nuki(AuthorizationIdType idType) {
   PairingResult result;
   if (this->pairing_state_ == PairingState::Success) {
     this->save_credentials();
+    this->save_paired_address_();
     result = PairingResult::Success;
     this->last_heartbeat_ = (esp_timer_get_time() / 1000);
   } else {
@@ -192,6 +193,7 @@ PairingResult NukiBle::pair_nuki(AuthorizationIdType idType) {
 
 void NukiBle::unpair_nuki() {
   this->delete_credentials();
+  this->paired_address_ = 0;
   this->is_paired_ = false;
   if (this->debug_nuki_connect_) {
     ESP_LOGD(TAG, "[%s] Credentials deleted", this->device_name_.c_str());
@@ -220,6 +222,10 @@ bool NukiBle::connect_ble(bool pairing) {
   }
 
   if (this->state() == esphome::esp32_ble_tracker::ClientState::IDLE) {
+    if (!pairing && this->get_address() == 0 && this->paired_address_ != 0) {
+      // Lost on the way (see disconnect()): this client only ever talks to its paired device
+      this->set_address(this->paired_address_);
+    }
     this->pairing_mode_ = pairing;
     this->notify_registered_ = false;
     this->not_connected_logged_ = false;
@@ -924,6 +930,7 @@ bool NukiBle::retrieve_credentials() {
       address = (address << 8) | buff[i];
     }
     this->set_address(address);
+    this->paired_address_ = address;
 
     // unpair_nuki() leaves the credentials empty
     if (is_char_array_empty(this->secret_key_k_, sizeof(this->secret_key_k_)) || is_char_array_empty(this->authorization_id_, sizeof(this->authorization_id_))) {
@@ -1704,6 +1711,16 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
       ESP_LOGE(TAG, "UNKNOWN RETURN COMMAND: %04x", (unsigned int)returnCode);
   }
 }
+
+void NukiBle::disconnect() {
+  const uint64_t address = this->get_address();
+  esphome::esp32_ble_client::BLEClientBase::disconnect();
+  if (address != 0 && this->get_address() == 0) {
+    this->set_address(address);
+  }
+}
+
+void NukiBle::save_paired_address_() { this->paired_address_ = this->get_address(); }
 
 void NukiBle::abort_command() {
   this->nuki_command_state_ = CommandState::Idle;

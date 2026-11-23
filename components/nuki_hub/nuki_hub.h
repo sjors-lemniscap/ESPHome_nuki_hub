@@ -235,6 +235,10 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// Ends an attempt that waits for a connection or an answer for too long
   CmdResult check_attempt_deadline_(uint32_t now);
   void check_beacon_age_();
+  enum class Presence : uint8_t { PRESENT, WAITING, SILENT };
+  Presence presence_(uint32_t now);
+  void require_beacon_();
+  void end_attempt_();
   void do_unpair_();
   void on_log_(uint8_t level, const char *message, size_t length);
 
@@ -403,6 +407,14 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   static const uint32_t CONNECT_DEADLINE_MS = 10000;
   static const uint32_t ATTEMPT_DEADLINE_MS = 90000;
   static const int64_t BEACON_TIMEOUT_MS = 180000;
+  // Listening this long for an advertisement without hearing one: the device is not there
+  static const uint32_t SILENT_MS = 20000;
+  static uint8_t radio_users_;
+  bool need_beacon_{true};
+  int64_t need_beacon_after_{0};
+  uint32_t silent_listen_ms_{0};
+  uint32_t presence_tick_{0};
+  bool silent_logged_{false};
   uint32_t attempt_started_{0};
   bool unpair_requested_{false};
   bool attempt_connected_{false};

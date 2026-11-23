@@ -339,7 +339,8 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
       return refuse("expired");
     }
     if (!this->pin_valid_) {
-      return refuse(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
+      // Not checked yet (the device was not reached since the start) is not the same as wrong
+      return refuse(this->security_pin_ == 0 ? "noPinSet" : (this->pin_checked_ ? "noValidPinSet" : "configNotReady"));
     }
     if (!this->keypad_control_) {
       return refuse("keypadControlDisabled");
