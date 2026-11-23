@@ -32,6 +32,7 @@ static const char *const TAG = "nuki_hub";
 
 static const uint8_t RESTART_REASON_NONE = 0;
 static const uint8_t RESTART_REASON_MQTT = 1;
+static const uint8_t RESTART_REASON_BLUETOOTH = 2;
 
 // Payloads this component writes to its own command topics, never commands
 static bool is_placeholder(const std::string &payload) {
@@ -96,6 +97,16 @@ void NukiHubComponent::setup() {
   }
 #endif
 
+  if (this->log_marker_in_flash_) {
+    this->log_marker_pref_ =
+        global_preferences->make_preference<uint32_t>(fnv1_hash(this->topic_prefix_ + "_nuki_hub_log_marker"));
+    uint32_t marker = 0;
+    if (this->log_marker_pref_.load(&marker) && marker != 0) {
+      this->log_marker_ = marker;
+      this->log_marker_known_ = true;
+    }
+  }
+
   NukiBle *ble = this->ble();
   ble->set_debug_connect(this->debug_connect_);
   ble->set_debug_communication(this->debug_communication_);
@@ -107,7 +118,7 @@ void NukiHubComponent::setup() {
   ble->setup();
   ble->set_event_handler(this);
   ble->initialize();
-  ble->set_disconnect_timeout(2000);
+  ble->set_disconnect_timeout(this->ble_disconnect_timeout_);
   ble->set_general_timeout(this->ble_general_timeout_);
   ble->set_command_timeout(this->ble_command_timeout_);
 
@@ -340,6 +351,18 @@ void NukiHubComponent::on_mqtt_connected_() {
       }
       this->handle_keypad_action_(payload);
     });
+    this->subscribe_("/keypad/batchJson", [this](const std::string &payload) {
+      if (is_placeholder(payload)) {
+        return;
+      }
+      this->handle_keypad_batch_(payload);
+    });
+    this->subscribe_("/keypad/syncJson", [this](const std::string &payload) {
+      if (is_placeholder(payload)) {
+        return;
+      }
+      this->handle_keypad_sync_(payload);
+    });
     this->subscribe_("/authorization/action", [this](const std::string &payload) {
       if (is_placeholder(payload)) {
         return;
@@ -361,7 +384,7 @@ void NukiHubComponent::on_mqtt_connected_() {
 
     // The marker of the last published log entry survives a restart as a retained message
     this->subscribe_("/lastRollingLog", [this](const std::string &payload) {
-      if (this->log_marker_known_ || !util::is_number(payload)) {
+      if (this->log_marker_known_ || this->log_marker_in_flash_ || !util::is_number(payload)) {
         return;
       }
       this->log_marker_ = strtoul(payload.c_str(), nullptr, 10);
@@ -382,6 +405,14 @@ void NukiHubComponent::on_mqtt_connected_() {
       uint8_t reason = RESTART_REASON_MQTT;
       this->restart_reason_pref_.save(&reason);
       global_preferences->sync();
+      // Commands that will not be executed anymore get an answer instead of silence
+      std::deque<Operation> dropped;
+      dropped.swap(this->queue_);
+      for (auto &op : dropped) {
+        if (op.done) {
+          op.done(CmdResult::Error);
+        }
+      }
       this->set_timeout("restart", 500, [] { App.safe_reboot(); });
     });
   }
@@ -426,7 +457,9 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
   if (initial) {
     this->publish_hub_("/maintenance/mqttConnectionState", "online");
     this->publish_hub_("/maintenance/restartReasonNukiHub",
-                       this->restart_reason_ == RESTART_REASON_MQTT ? "RequestedViaMqtt" : "NotApplicable");
+                       this->restart_reason_ == RESTART_REASON_MQTT
+                           ? "RequestedViaMqtt"
+                           : (this->restart_reason_ == RESTART_REASON_BLUETOOTH ? "BluetoothWatchdog" : "NotApplicable"));
     this->publish_hub_("/maintenance/restartReasonNukiEsp", esp_reset_reason_text());
     this->publish_hub_("/info/nukiHubVersion", std::string("esphome-") + NUKI_HUB_VERSION);
     this->publish_hub_("/info/nukiHubBuild", ESPHOME_VERSION);
@@ -453,6 +486,15 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
   snprintf(buf, sizeof(buf), "%u", (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
   this->publish_hub_("/maintenance/minFreeHeapInternal", buf);
   this->publish_status_();
+  {
+    JsonDocument json;
+    json["commands"] = this->stat_commands_;
+    json["failed"] = this->stat_failed_;
+    json["retries"] = this->stat_retries_;
+    json["averageMs"] = this->stat_commands_ ? this->stat_total_ms_ / this->stat_commands_ : 0;
+    json["maxMs"] = this->stat_max_ms_;
+    this->publish_json_("/bluetoothJson", json);
+  }
 #ifdef USE_WIFI
   if (wifi::global_wifi_component != nullptr) {
     snprintf(buf, sizeof(buf), "%d", wifi::global_wifi_component->wifi_rssi());
@@ -584,6 +626,9 @@ void NukiHubComponent::publish_result_(const char *topic, const std::string &req
     extra(json);
   }
   this->publish_json_(topic, doc, false);
+  // The same on one topic for all commands, for a log of who asked for what
+  json["command"] = topic + 1;
+  this->publish_json_("/audit", doc, false);
 }
 
 void NukiHubComponent::answer_command_(const char *base, const std::string &request_id, const std::string &action,
@@ -663,6 +708,7 @@ bool NukiHubComponent::start_next_operation_() {
   }
   this->op_active_ = true;
   this->op_retry_pending_ = false;
+  this->op_started_ = millis();
   this->op_retries_left_ = this->op_.retry ? this->command_retries_ : 0;
   ESP_LOGD(TAG, "Starting: %s", this->op_.name);
   return true;
@@ -674,6 +720,7 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
 
   if (result == CmdResult::Success) {
     this->consecutive_failures_ = 0;
+    this->last_success_ = millis();
     this->set_available_(true);
   } else if (result != CmdResult::Failed && this->consecutive_failures_ < 255) {
     this->consecutive_failures_++;
@@ -685,6 +732,7 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
     ESP_LOGW(TAG, "%s: Last command failed (%s), retrying after %" PRIu32 " milliseconds. Retry %u of %u", this->kind(),
              result_to_string(result), this->command_retry_delay_, attempt, this->command_retries_);
     this->publish_int_("/retry", attempt);
+    this->stat_retries_++;
     this->op_retry_pending_ = true;
     this->next_op_time_ = millis() + this->command_retry_delay_;
     return;
@@ -700,6 +748,14 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
   }
   if (this->op_retries_left_ != this->command_retries_ && this->op_.retry) {
     this->publish_int_("/retry", 0);
+  }
+
+  const uint32_t took = millis() - this->op_started_;
+  this->stat_commands_++;
+  this->stat_total_ms_ += took;
+  this->stat_max_ms_ = std::max(this->stat_max_ms_, took);
+  if (retryable) {
+    this->stat_failed_++;
   }
 
   this->op_active_ = false;
@@ -738,6 +794,7 @@ void NukiHubComponent::loop() {
   if (now - this->last_beacon_check_ >= 10000) {
     this->last_beacon_check_ = now;
     this->check_beacon_age_();
+    this->check_bluetooth_watchdog_(now);
   }
 
   ble->update_connection_state();
@@ -927,451 +984,6 @@ Operation NukiHubComponent::make_time_operation_() {
   };
 #endif
   return op;
-}
-
-// --------------------------------------------------------------------------------------------
-// Keypad
-// --------------------------------------------------------------------------------------------
-
-const KeypadEntry *NukiHubComponent::find_keypad_entry_(uint16_t code_id) const {
-  for (const auto &entry : this->keypad_entries_) {
-    if (entry.codeId == code_id) {
-      return &entry;
-    }
-  }
-  return nullptr;
-}
-
-Operation NukiHubComponent::make_keypad_operation_() {
-  Operation op;
-  op.name = "read keypad codes";
-  op.step = [this] { return this->ble()->retrieve_keypad_entries(0, this->max_keypad_entries_); };
-  op.done = [this](CmdResult result) {
-    if (result != CmdResult::Success) {
-      return;
-    }
-    this->ble()->get_keypad_entries(&this->keypad_entries_);
-    std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
-              [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
-    this->keypad_cache_valid_ = true;
-    ESP_LOGI(TAG, "%s keypad codes: %u", this->kind(), (unsigned) this->keypad_entries_.size());
-    this->publish_keypad_();
-  };
-  return op;
-}
-
-static void keypad_entry_to_json(const KeypadEntry &entry, JsonObject json, bool include_code) {
-  char dt[20];
-  char tod[6];
-  json["codeId"] = entry.codeId;
-  if (include_code) {
-    json["code"] = entry.code;
-  }
-  json["enabled"] = entry.enabled;
-  json["name"] = util::fixed_string(entry.name, sizeof(entry.name));
-  util::date_time(dt, entry.dateCreatedYear, entry.dateCreatedMonth, entry.dateCreatedDay, entry.dateCreatedHour,
-                  entry.dateCreatedMin, entry.dateCreatedSec);
-  json["dateCreated"] = dt;
-  json["lockCount"] = entry.lockCount;
-  util::date_time(dt, entry.dateLastActiveYear, entry.dateLastActiveMonth, entry.dateLastActiveDay,
-                  entry.dateLastActiveHour, entry.dateLastActiveMin, entry.dateLastActiveSec);
-  json["dateLastActive"] = dt;
-  json["timeLimited"] = entry.timeLimited;
-  util::date_time(dt, entry.allowedFromYear, entry.allowedFromMonth, entry.allowedFromDay, entry.allowedFromHour,
-                  entry.allowedFromMin, entry.allowedFromSec);
-  json["allowedFrom"] = dt;
-  util::date_time(dt, entry.allowedUntilYear, entry.allowedUntilMonth, entry.allowedUntilDay, entry.allowedUntilHour,
-                  entry.allowedUntilMin, entry.allowedUntilSec);
-  json["allowedUntil"] = dt;
-  util::weekdays_to_json(entry.allowedWeekdays, json["allowedWeekdays"].to<JsonArray>());
-  util::time_of_day(tod, entry.allowedFromTimeHour, entry.allowedFromTimeMin);
-  json["allowedFromTime"] = tod;
-  util::time_of_day(tod, entry.allowedUntilTimeHour, entry.allowedUntilTimeMin);
-  json["allowedUntilTime"] = tod;
-}
-
-void NukiHubComponent::publish_keypad_() {
-  JsonDocument doc;
-  JsonArray list = doc.to<JsonArray>();
-  for (const auto &entry : this->keypad_entries_) {
-    keypad_entry_to_json(entry, list.add<JsonObject>(), this->keypad_publish_code_);
-  }
-  this->publish_json_("/keypad/json", doc);
-}
-
-void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
-  const std::string request_id = util::request_id(payload);
-  if (!this->is_paired()) {
-    this->publish_("/keypad/commandResultJson", "notPaired");
-    this->publish_result_("/keypad/result", request_id, "", "notPaired", false, millis());
-    return;
-  }
-  auto cmd = std::make_shared<KeypadCommand>();
-  cmd->payload = payload;
-  cmd->request_id = request_id;
-  cmd->received_at = millis();
-
-  Operation op;
-  op.name = "keypad command";
-  op.step = [this, cmd] { return this->keypad_command_step_(*cmd); };
-  op.done = [this, cmd](CmdResult result) { this->keypad_command_done_(*cmd, result); };
-
-  if (this->queue_.size() >= MAX_QUEUE) {
-    this->publish_("/keypad/commandResultJson", "busy");
-    this->publish_result_("/keypad/result", request_id, "", "busy", false, cmd->received_at);
-    return;
-  }
-  this->keypad_commands_pending_++;
-  this->enqueue(std::move(op));
-}
-
-void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result) {
-  if (this->keypad_commands_pending_ > 0) {
-    this->keypad_commands_pending_--;
-  }
-  const char *text = cmd.verdict != nullptr ? cmd.verdict : result_to_string(result);
-  if (cmd.verdict != nullptr) {
-    ESP_LOGI(TAG, "Keypad command not executed: %s", cmd.verdict);
-  }
-  if (cmd.verdict == nullptr) {
-    ESP_LOGI(TAG, "%s keypad code: %s", cmd.action.c_str(), text);
-    if (result == CmdResult::Success) {
-      if (cmd.action == "delete") {
-        this->keypad_entries_.erase(std::remove_if(this->keypad_entries_.begin(), this->keypad_entries_.end(),
-                                                   [&cmd](const KeypadEntry &e) { return e.codeId == cmd.code_id; }),
-                                    this->keypad_entries_.end());
-      } else if (cmd.action == "add") {
-        // The device answers an add with the id it gave the code. Without it the id is
-        // only known after the next read.
-        cmd.code_id = this->ble()->get_last_keypad_code_id();
-        if (cmd.code_id != 0 && this->find_keypad_entry_(cmd.code_id) == nullptr) {
-          KeypadEntry e{};
-          e.codeId = cmd.code_id;
-          e.code = cmd.add.code;
-          memcpy(e.name, cmd.add.name, sizeof(e.name));
-          e.enabled = 1;
-          e.timeLimited = cmd.add.timeLimited;
-          e.allowedFromYear = cmd.add.allowedFromYear;
-          e.allowedFromMonth = cmd.add.allowedFromMonth;
-          e.allowedFromDay = cmd.add.allowedFromDay;
-          e.allowedFromHour = cmd.add.allowedFromHour;
-          e.allowedFromMin = cmd.add.allowedFromMin;
-          e.allowedFromSec = cmd.add.allowedFromSec;
-          e.allowedUntilYear = cmd.add.allowedUntilYear;
-          e.allowedUntilMonth = cmd.add.allowedUntilMonth;
-          e.allowedUntilDay = cmd.add.allowedUntilDay;
-          e.allowedUntilHour = cmd.add.allowedUntilHour;
-          e.allowedUntilMin = cmd.add.allowedUntilMin;
-          e.allowedUntilSec = cmd.add.allowedUntilSec;
-          e.allowedWeekdays = cmd.add.allowedWeekdays;
-          e.allowedFromTimeHour = cmd.add.allowedFromTimeHour;
-          e.allowedFromTimeMin = cmd.add.allowedFromTimeMin;
-          e.allowedUntilTimeHour = cmd.add.allowedUntilTimeHour;
-          e.allowedUntilTimeMin = cmd.add.allowedUntilTimeMin;
-          this->keypad_entries_.push_back(e);
-        } else {
-          this->keypad_cache_valid_ = false;
-        }
-      } else {
-        for (auto &e : this->keypad_entries_) {
-          if (e.codeId != cmd.update.codeId) {
-            continue;
-          }
-          e.code = cmd.update.code;
-          memcpy(e.name, cmd.update.name, sizeof(e.name));
-          e.enabled = cmd.update.enabled;
-          e.timeLimited = cmd.update.timeLimited;
-          e.allowedFromYear = cmd.update.allowedFromYear;
-          e.allowedFromMonth = cmd.update.allowedFromMonth;
-          e.allowedFromDay = cmd.update.allowedFromDay;
-          e.allowedFromHour = cmd.update.allowedFromHour;
-          e.allowedFromMin = cmd.update.allowedFromMin;
-          e.allowedFromSec = cmd.update.allowedFromSec;
-          e.allowedUntilYear = cmd.update.allowedUntilYear;
-          e.allowedUntilMonth = cmd.update.allowedUntilMonth;
-          e.allowedUntilDay = cmd.update.allowedUntilDay;
-          e.allowedUntilHour = cmd.update.allowedUntilHour;
-          e.allowedUntilMin = cmd.update.allowedUntilMin;
-          e.allowedUntilSec = cmd.update.allowedUntilSec;
-          e.allowedWeekdays = cmd.update.allowedWeekdays;
-          e.allowedFromTimeHour = cmd.update.allowedFromTimeHour;
-          e.allowedFromTimeMin = cmd.update.allowedFromTimeMin;
-          e.allowedUntilTimeHour = cmd.update.allowedUntilTimeHour;
-          e.allowedUntilTimeMin = cmd.update.allowedUntilTimeMin;
-        }
-      }
-    }
-    // Read the list back from the device once the commands are through
-    this->keypad_refresh_at_ = millis() + 500;
-    if (this->keypad_refresh_at_ == 0) {
-      this->keypad_refresh_at_ = 1;
-    }
-  }
-  this->publish_("/keypad/commandResultJson", text);
-
-  const bool executed = cmd.verdict == nullptr;
-  const uint16_t code_id = cmd.code_id;
-  this->publish_result_("/keypad/result", cmd.request_id, cmd.action, text, executed && result == CmdResult::Failed,
-                        cmd.received_at, [code_id](JsonObject json) {
-                          if (code_id != 0) {
-                            json["codeId"] = code_id;
-                          }
-                        });
-  if (executed && result == CmdResult::Success && code_id != 0) {
-    // The one entry that changed, for clients that keep a copy of the list
-    JsonDocument doc;
-    JsonObject json = doc.to<JsonObject>();
-    json["change"] = cmd.action == "add" ? "added" : (cmd.action == "delete" ? "deleted" : "updated");
-    json["codeId"] = code_id;
-    const KeypadEntry *entry = this->find_keypad_entry_(code_id);
-    if (entry != nullptr && cmd.action != "delete") {
-      keypad_entry_to_json(*entry, json["entry"].to<JsonObject>(), this->keypad_publish_code_);
-      if (cmd.action == "add") {
-        // Not known before the next read of the list
-        json["entry"].remove("dateCreated");
-        json["entry"].remove("dateLastActive");
-        json["entry"].remove("lockCount");
-      }
-    }
-    this->publish_json_("/keypad/changed", doc, false);
-  }
-}
-
-// Fills the date and time fields `prefix`Year..Sec of a packed entry from six values
-#define NUKI_SET_DATE(entry, prefix, v) \
-  do { \
-    (entry).prefix##Year = (v)[0]; \
-    (entry).prefix##Month = (v)[1]; \
-    (entry).prefix##Day = (v)[2]; \
-    (entry).prefix##Hour = (v)[3]; \
-    (entry).prefix##Min = (v)[4]; \
-    (entry).prefix##Sec = (v)[5]; \
-  } while (0)
-
-CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
-  auto refuse = [&cmd](const char *verdict) {
-    cmd.verdict = verdict;
-    return CmdResult::Failed;
-  };
-
-  if (cmd.phase == KeypadCommand::Phase::Parse) {
-    if (!this->pin_valid_) {
-      return refuse(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
-    }
-    if (!this->keypad_control_) {
-      return refuse("keypadControlDisabled");
-    }
-    if (!this->has_keypad()) {
-      return refuse(this->config_valid() ? "keypadNotAvailable" : "configNotReady");
-    }
-
-    JsonDocument json;
-    if (deserializeJson(json, cmd.payload) || !json.is<JsonObjectConst>()) {
-      return refuse("invalidJson");
-    }
-    if (!json["action"].is<const char *>()) {
-      return refuse("noActionSet");
-    }
-    cmd.action = json["action"].as<const char *>();
-    cmd.code_id = json["codeId"].as<unsigned int>();
-
-    if (cmd.action == "check") {
-      return refuse("checkingKeypadCodesDisabled");
-    }
-    if (cmd.action != "add" && cmd.action != "update" && cmd.action != "delete") {
-      return refuse("invalidAction");
-    }
-
-    if (cmd.action == "delete") {
-      if (cmd.code_id == 0) {
-        return refuse("noCodeIdSet");
-      }
-      cmd.phase = KeypadCommand::Phase::Fetch;
-    } else {
-      std::string name = json["name"].is<JsonVariantConst>() ? util::as_text(json["name"]) : "";
-      cmd.has_name = !name.empty();
-      if (!cmd.has_name && cmd.action == "add") {
-        return refuse("noNameSet");
-      }
-
-      uint32_t code = 0;
-      if (json["code"].is<JsonVariantConst>()) {
-        const std::string code_text = util::as_text(json["code"]);
-        code = json["code"].as<unsigned int>();
-        if (!(code > 100000 && code < 1000000 && code_text.find('0') == std::string::npos)) {
-          return refuse("noValidCodeSet");
-        }
-        cmd.has_code = true;
-      } else if (cmd.action == "add") {
-        return refuse("noCodeSet");
-      }
-
-      cmd.has_enabled = json["enabled"].is<JsonVariantConst>();
-      const uint8_t enabled = cmd.has_enabled ? (json["enabled"].as<unsigned int>() ? 1 : 0) : 1;
-      cmd.has_time_limited = json["timeLimited"].is<JsonVariantConst>();
-      const uint8_t time_limited = cmd.has_time_limited ? (json["timeLimited"].as<unsigned int>() == 1 ? 1 : 0) : 0;
-
-      uint16_t from[6] = {0}, until[6] = {0};
-      uint8_t from_time[2] = {0}, until_time[2] = {0};
-      uint8_t weekdays = 0;
-      if (time_limited == 1) {
-        const std::string allowed_from = util::as_text(json["allowedFrom"]);
-        if (!allowed_from.empty()) {
-          if (!util::parse_date_time(allowed_from, from)) {
-            return refuse("invalidAllowedFrom");
-          }
-          cmd.has_from = true;
-        }
-        const std::string allowed_until = util::as_text(json["allowedUntil"]);
-        if (!allowed_until.empty()) {
-          if (!util::parse_date_time(allowed_until, until)) {
-            return refuse("invalidAllowedUntil");
-          }
-          cmd.has_until = true;
-        }
-        const std::string allowed_from_time = util::as_text(json["allowedFromTime"]);
-        if (!allowed_from_time.empty()) {
-          if (!util::parse_time_of_day(allowed_from_time, from_time)) {
-            return refuse("invalidAllowedFromTime");
-          }
-          cmd.has_from_time = true;
-        }
-        const std::string allowed_until_time = util::as_text(json["allowedUntilTime"]);
-        if (!allowed_until_time.empty()) {
-          if (!util::parse_time_of_day(allowed_until_time, until_time)) {
-            return refuse("invalidAllowedUntilTime");
-          }
-          cmd.has_until_time = true;
-        }
-        if (json["allowedWeekdays"].is<JsonVariantConst>()) {
-          weekdays = util::weekdays_from_json(json["allowedWeekdays"]);
-          cmd.has_weekdays = true;
-        }
-      }
-
-      if (cmd.action == "add") {
-        NewKeypadEntry &e = cmd.add;
-        memset(&e, 0, sizeof(e));
-        e.code = code;
-        memcpy(e.name, name.c_str(), std::min(name.size(), sizeof(e.name)));
-        e.timeLimited = time_limited;
-        NUKI_SET_DATE(e, allowedFrom, from);
-        NUKI_SET_DATE(e, allowedUntil, until);
-        e.allowedWeekdays = weekdays;
-        e.allowedFromTimeHour = from_time[0];
-        e.allowedFromTimeMin = from_time[1];
-        e.allowedUntilTimeHour = until_time[0];
-        e.allowedUntilTimeMin = until_time[1];
-        cmd.phase = KeypadCommand::Phase::Execute;
-      } else {
-        if (cmd.code_id == 0) {
-          return refuse("noCodeIdSet");
-        }
-        UpdatedKeypadEntry &e = cmd.update;
-        memset(&e, 0, sizeof(e));
-        e.codeId = cmd.code_id;
-        e.code = code;
-        memcpy(e.name, name.c_str(), std::min(name.size(), sizeof(e.name)));
-        e.enabled = enabled;
-        e.timeLimited = time_limited;
-        NUKI_SET_DATE(e, allowedFrom, from);
-        NUKI_SET_DATE(e, allowedUntil, until);
-        e.allowedWeekdays = weekdays;
-        e.allowedFromTimeHour = from_time[0];
-        e.allowedFromTimeMin = from_time[1];
-        e.allowedUntilTimeHour = until_time[0];
-        e.allowedUntilTimeMin = until_time[1];
-        cmd.phase = KeypadCommand::Phase::Fetch;
-      }
-    }
-  }
-
-  if (cmd.phase == KeypadCommand::Phase::Fetch) {
-    // delete and update refer to an existing entry: look it up, in a fresh list if the
-    // cached one doesn't have it
-    const KeypadEntry *existing = this->keypad_cache_valid_ ? this->find_keypad_entry_(cmd.code_id) : nullptr;
-    if (existing == nullptr && !cmd.fetched) {
-      CmdResult result = this->ble()->retrieve_keypad_entries(0, this->max_keypad_entries_);
-      if (result == CmdResult::Working) {
-        return result;
-      }
-      if (result != CmdResult::Success) {
-        if (result == CmdResult::Failed) {
-          return refuse("failedToRetrieveExistingKeypadEntry");
-        }
-        return result;
-      }
-      cmd.fetched = true;
-      this->ble()->get_keypad_entries(&this->keypad_entries_);
-      std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
-                [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
-      this->keypad_cache_valid_ = true;
-      existing = this->find_keypad_entry_(cmd.code_id);
-    }
-    if (existing == nullptr) {
-      return refuse("noExistingCodeIdSet");
-    }
-
-    if (cmd.action == "update") {
-      // Everything the command left out keeps its current value
-      UpdatedKeypadEntry &e = cmd.update;
-      if (!cmd.has_name) {
-        memcpy(e.name, existing->name, sizeof(e.name));
-      }
-      if (!cmd.has_code) {
-        e.code = existing->code;
-      }
-      if (!cmd.has_enabled) {
-        e.enabled = existing->enabled;
-      }
-      if (!cmd.has_time_limited) {
-        e.timeLimited = existing->timeLimited;
-      }
-      if (e.timeLimited == 1) {
-        if (!cmd.has_from) {
-          e.allowedFromYear = existing->allowedFromYear;
-          e.allowedFromMonth = existing->allowedFromMonth;
-          e.allowedFromDay = existing->allowedFromDay;
-          e.allowedFromHour = existing->allowedFromHour;
-          e.allowedFromMin = existing->allowedFromMin;
-          e.allowedFromSec = existing->allowedFromSec;
-        }
-        if (!cmd.has_until) {
-          e.allowedUntilYear = existing->allowedUntilYear;
-          e.allowedUntilMonth = existing->allowedUntilMonth;
-          e.allowedUntilDay = existing->allowedUntilDay;
-          e.allowedUntilHour = existing->allowedUntilHour;
-          e.allowedUntilMin = existing->allowedUntilMin;
-          e.allowedUntilSec = existing->allowedUntilSec;
-        }
-        if (!cmd.has_weekdays) {
-          e.allowedWeekdays = existing->allowedWeekdays;
-        }
-        if (!cmd.has_from_time) {
-          e.allowedFromTimeHour = existing->allowedFromTimeHour;
-          e.allowedFromTimeMin = existing->allowedFromTimeMin;
-        }
-        if (!cmd.has_until_time) {
-          e.allowedUntilTimeHour = existing->allowedUntilTimeHour;
-          e.allowedUntilTimeMin = existing->allowedUntilTimeMin;
-        }
-      }
-    }
-    cmd.phase = KeypadCommand::Phase::Execute;
-  }
-
-  if (cmd.action == "add") {
-    if (!cmd.fetched) {
-      // First step of the add itself: the id the device answers with belongs to this command
-      cmd.fetched = true;
-      this->ble()->clear_last_keypad_code_id();
-    }
-    return this->ble()->add_keypad_entry(cmd.add);
-  }
-  if (cmd.action == "update") {
-    return this->ble()->update_keypad_entry(cmd.update);
-  }
-  return this->ble()->delete_keypad_entry(cmd.code_id);
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1605,7 +1217,74 @@ bool NukiHubComponent::log_marker_ready_() const {
 #endif
 }
 
-void NukiHubComponent::publish_log_marker_() { this->publish_int_("/lastRollingLog", this->log_marker_); }
+void NukiHubComponent::publish_log_marker_() {
+  this->publish_int_("/lastRollingLog", this->log_marker_);
+  if (this->log_marker_in_flash_) {
+    this->log_marker_pref_.save(&this->log_marker_);
+  }
+}
+
+void NukiHubComponent::publish_event_(const char *type, JsonObject entry) {
+  JsonDocument doc;
+  JsonObject json = doc.to<JsonObject>();
+  for (JsonPair field : entry) {
+    json[field.key()] = field.value();
+  }
+  char time[20];
+  util::date_time(time, entry["timeYear"].as<int>(), entry["timeMonth"].as<int>(), entry["timeDay"].as<int>(),
+                  entry["timeHour"].as<int>(), entry["timeMinute"].as<int>(), entry["timeSecond"].as<int>());
+  json["time"] = time;
+  std::string topic = "/event/";
+  topic += type;
+  this->publish_json_(topic.c_str(), doc, false);
+  if (strcmp(type, "keypad") == 0 && strcmp(entry["completionStatus"] | "", "invalidCode") == 0) {
+    this->note_invalid_code_();
+  }
+}
+
+// Several wrong codes within a short time: someone is guessing
+void NukiHubComponent::note_invalid_code_() {
+  if (this->invalid_code_alert_count_ == 0) {
+    return;
+  }
+  const uint32_t now = millis();
+  this->invalid_code_times_.push_back(now);
+  this->invalid_code_times_.erase(
+      std::remove_if(this->invalid_code_times_.begin(), this->invalid_code_times_.end(),
+                     [this, now](uint32_t t) { return now - t > this->invalid_code_alert_window_ * 1000; }),
+      this->invalid_code_times_.end());
+  if (this->invalid_code_times_.size() < this->invalid_code_alert_count_) {
+    return;
+  }
+  ESP_LOGW(TAG, "%u wrong keypad codes within %" PRIu32 " seconds", (unsigned) this->invalid_code_times_.size(),
+           this->invalid_code_alert_window_);
+  JsonDocument json;
+  json["count"] = this->invalid_code_times_.size();
+  json["windowSeconds"] = this->invalid_code_alert_window_;
+  this->publish_json_("/event/invalidCodes", json, false);
+  this->invalid_code_times_.clear();
+}
+
+// The Nuki device is advertising, but no command got through for a long time: the Bluetooth
+// stack of the ESP32 is the likely cause, and a restart the remedy Nuki Hub uses as well.
+void NukiHubComponent::check_bluetooth_watchdog_(uint32_t now) {
+  if (this->bluetooth_watchdog_ == 0 || !this->is_paired() || this->beacon_lost_ || this->consecutive_failures_ < 5) {
+    return;
+  }
+  if (now - this->last_success_ < this->bluetooth_watchdog_ * 1000) {
+    return;
+  }
+  ESP_LOGE(TAG, "No command reached the %s for %" PRIu32 " seconds although it is advertising, restarting",
+           this->kind(), this->bluetooth_watchdog_);
+  uint8_t reason = RESTART_REASON_BLUETOOTH;
+  this->restart_reason_pref_.save(&reason);
+  global_preferences->sync();
+  if (this->maintenance_enabled_) {
+    this->publish_hub_("/maintenance/mqttConnectionState", "offline");
+  }
+  this->bluetooth_watchdog_ = 0;
+  this->set_timeout("restart", 500, [] { App.safe_reboot(); });
+}
 
 // --------------------------------------------------------------------------------------------
 // Helpers

@@ -960,6 +960,11 @@ void NukiHubLock::process_log_() {
       this->publish_json_("/rollingLog", single, false);
       this->log_marker_ = log.index;
       this->publish_log_marker_();
+      if (log.loggingType == LoggingType::KeypadAction) {
+        this->publish_event_("keypad", entry);
+      } else if (log.loggingType == LoggingType::LockAction) {
+        this->publish_event_("action", entry);
+      }
     }
   }
 

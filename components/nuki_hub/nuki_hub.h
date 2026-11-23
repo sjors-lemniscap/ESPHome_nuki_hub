@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,10 +34,31 @@ struct Operation {
   bool retry{true};
 };
 
-/// What the last executed keypad command decided without talking to the device
+/// Keypad commands that arrived together and are answered together
+struct KeypadBatch {
+  std::string request_id;
+  const char *result_topic{"/keypad/batchResult"};
+  uint32_t received_at{0};
+  size_t total{0};
+  size_t remaining{0};
+  size_t succeeded{0};
+  bool silent{false};
+  JsonDocument results;
+  /// Extra fields of the combined result
+  JsonDocument summary;
+};
+
+/// A keypad command on its way through the queue
 struct KeypadCommand {
   std::string payload;
-  enum class Phase : uint8_t { Parse, Fetch, Execute } phase{Phase::Parse};
+  enum class Phase : uint8_t { Parse, Fetch, Execute, Verify } phase{Phase::Parse};
+  std::shared_ptr<KeypadBatch> batch;
+  size_t batch_index{0};
+  std::string name;
+  /// From "timeoutMs": not executed if it waited longer than this
+  uint32_t timeout_ms{0};
+  /// An add that found its entry on the keypad already
+  bool existed{false};
   std::string action;
   uint16_t code_id{0};
   nuki_lock::NewKeypadEntry add{};
@@ -87,6 +109,11 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_query_interval_time_control(uint32_t seconds) { this->interval_time_control_ = seconds; }
   void set_keypad_control(bool enabled) { this->keypad_control_ = enabled; }
   void set_keypad_publish_code(bool enabled) { this->keypad_publish_code_ = enabled; }
+  void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
+  void set_keypad_delete_expired(uint32_t after_seconds, const std::string &prefix) {
+    this->keypad_delete_expired_after_ = after_seconds;
+    this->keypad_delete_expired_prefix_ = prefix;
+  }
   void set_max_keypad_entries(uint16_t count) { this->max_keypad_entries_ = count; }
   void set_max_auth_entries(uint16_t count) { this->max_auth_entries_ = count; }
   void set_max_log_entries(uint16_t count) { this->max_log_entries_ = count; }
@@ -98,6 +125,13 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_update_time(bool enabled) { this->update_time_ = enabled; }
   void set_publish_maintenance(bool enabled) { this->maintenance_enabled_ = enabled; }
   void set_mqtt_log_level(uint8_t level) { this->mqtt_log_level_ = level; }
+  void set_log_marker_in_flash(bool enabled) { this->log_marker_in_flash_ = enabled; }
+  void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
+  void set_bluetooth_watchdog(uint32_t seconds) { this->bluetooth_watchdog_ = seconds; }
+  void set_invalid_code_alert(uint8_t count, uint32_t window_seconds) {
+    this->invalid_code_alert_count_ = count;
+    this->invalid_code_alert_window_ = window_seconds;
+  }
   void set_debug(bool connect, bool communication, bool readable_data, bool hex_data, bool command) {
     this->debug_connect_ = connect;
     this->debug_communication_ = communication;
@@ -181,6 +215,14 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
 
   // Keypad
   void handle_keypad_action_(const std::string &payload);
+  void handle_keypad_batch_(const std::string &payload);
+  void handle_keypad_sync_(const std::string &payload);
+  bool enqueue_keypad_command_(const std::string &payload, const std::string &request_id,
+                               std::shared_ptr<KeypadBatch> batch, size_t index);
+  std::shared_ptr<KeypadBatch> start_keypad_batch_(const std::string &request_id, const char *result_topic,
+                                                   const std::vector<std::string> &commands, uint32_t received_at);
+  void finish_keypad_batch_(KeypadBatch &batch);
+  void delete_expired_keypad_entries_();
   CmdResult keypad_command_step_(KeypadCommand &cmd);
   void keypad_command_done_(KeypadCommand &cmd, CmdResult result);
   Operation make_keypad_operation_();
@@ -200,6 +242,10 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// True once the marker of the last published entry is known (retained topic or first read)
   bool log_marker_ready_() const;
   void publish_log_marker_();
+  /// One activity log entry as an event: `event/keypad`, `event/action` or `event/ring`
+  void publish_event_(const char *type, JsonObject entry);
+  void note_invalid_code_();
+  void check_bluetooth_watchdog_(uint32_t now);
 
   static const char *result_to_string(CmdResult result);
 
@@ -219,6 +265,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   uint32_t interval_time_control_{3600};
   bool keypad_control_{true};
   bool keypad_publish_code_{true};
+  bool keypad_check_code_{false};
+  uint32_t keypad_delete_expired_after_{0};
+  std::string keypad_delete_expired_prefix_;
   uint16_t max_keypad_entries_{100};
   uint16_t max_auth_entries_{20};
   uint16_t max_log_entries_{5};
@@ -230,6 +279,21 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool update_time_{false};
   bool maintenance_enabled_{true};
   uint8_t mqtt_log_level_{0};
+  bool log_marker_in_flash_{false};
+  ESPPreferenceObject log_marker_pref_;
+  uint32_t ble_disconnect_timeout_{2000};
+  uint32_t bluetooth_watchdog_{0};
+  uint32_t last_success_{0};
+  uint8_t invalid_code_alert_count_{0};
+  uint32_t invalid_code_alert_window_{300};
+  std::vector<uint32_t> invalid_code_times_;
+  // Since boot, for maintenance/bluetoothJson
+  uint32_t stat_commands_{0};
+  uint32_t stat_failed_{0};
+  uint32_t stat_retries_{0};
+  uint32_t stat_total_ms_{0};
+  uint32_t stat_max_ms_{0};
+  uint32_t op_started_{0};
   std::string log_topic_;
   bool in_log_{false};
   bool debug_connect_{false}, debug_communication_{false}, debug_readable_data_{false}, debug_hex_data_{false},
@@ -246,7 +310,8 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool op_retry_pending_{false};
   uint32_t next_op_time_{0};
   uint32_t last_loop_{0};
-  static const size_t MAX_QUEUE = 24;
+  static const size_t MAX_QUEUE = 64;
+  static const size_t MAX_BATCH = 50;
   // Longest wait for the Bluetooth connection, and longest duration of one attempt
   static const uint32_t CONNECT_DEADLINE_MS = 10000;
   static const uint32_t ATTEMPT_DEADLINE_MS = 90000;
@@ -319,6 +384,12 @@ std::string as_text(JsonVariantConst value);
 bool is_number(const std::string &text);
 /// The "requestId" of a JSON command, empty if it has none
 std::string request_id(const std::string &payload);
+}  // namespace util
+
+/// A keypad entry in the JSON form of Nuki Hub
+void keypad_entry_to_json(const nuki_lock::KeypadEntry &entry, JsonObject json, bool include_code);
+
+namespace util {
 }  // namespace util
 
 }  // namespace esphome::nuki_hub

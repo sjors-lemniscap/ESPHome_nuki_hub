@@ -1,0 +1,65 @@
+# What every room has in common. A room's own file sets the substitutions and includes this
+# as a package, see entrance.yaml. Secrets: one secrets.yaml for what all rooms share
+# (Wi-Fi, broker, OTA password) and per room the values tools/nuki_hub_pairing.py writes.
+
+esphome:
+  name: nuki-${room}
+
+esp32:
+  board: ${board}
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
+    components: [nuki_lock, nuki_hub]
+
+esp32_ble_tracker:
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: ${timezone}
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: false
+  topic_prefix: ${room}/esphome
+  birth_message:
+    topic: ${room}/maintenance/mqttConnectionState
+    payload: online
+    retain: true
+  will_message:
+    topic: ${room}/maintenance/mqttConnectionState
+    payload: offline
+    retain: true
+
+nuki_hub:
+  - id: nuki
+    type: ${device}
+    topic_prefix: ${room}
+    security_pin: ${pin}
+    time_id: sntp_time
+    update_time: true
+    mqtt_log: INFO
+    keypad_publish_code: true
+    invalid_code_alert:
+      count: 3
+      window: 5min
+    pairing:
+      ble_address: ${ble_address}
+      secret_key: ${secret_key}
+      authorization_id: ${auth_id}

@@ -433,6 +433,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      */
     /// The error code of the last error report of the device (see the ErrorCode enums)
     uint8_t get_last_error_code() const { return this->error_code_; }
+    void set_last_error_code(uint8_t code) { this->error_code_ = code; }
 
     /// The id the device gave the keypad code added last, 0 if it sent none
     uint16_t get_last_keypad_code_id() const { return this->last_keypad_code_id_; }

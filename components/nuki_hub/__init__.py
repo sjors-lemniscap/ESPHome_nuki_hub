@@ -37,6 +37,10 @@ CONF_QUERY_INTERVAL_AUTHORIZATIONS = "query_interval_authorizations"
 CONF_QUERY_INTERVAL_TIME_CONTROL = "query_interval_time_control"
 CONF_KEYPAD_CONTROL = "keypad_control"
 CONF_KEYPAD_PUBLISH_CODE = "keypad_publish_code"
+CONF_KEYPAD_CHECK_CODE = "keypad_check_code"
+CONF_KEYPAD_DELETE_EXPIRED = "keypad_delete_expired"
+CONF_AFTER = "after"
+CONF_NAME_PREFIX = "name_prefix"
 CONF_MAX_KEYPAD_ENTRIES = "max_keypad_entries"
 CONF_MAX_AUTHORIZATION_ENTRIES = "max_authorization_entries"
 CONF_MAX_LOG_ENTRIES = "max_log_entries"
@@ -48,6 +52,12 @@ CONF_BLE_COMMAND_TIMEOUT = "ble_command_timeout"
 CONF_UPDATE_TIME = "update_time"
 CONF_PUBLISH_MAINTENANCE = "publish_maintenance"
 CONF_MQTT_LOG = "mqtt_log"
+CONF_LOG_MARKER_IN_FLASH = "log_marker_in_flash"
+CONF_BLE_DISCONNECT_TIMEOUT = "ble_disconnect_timeout"
+CONF_BLUETOOTH_WATCHDOG = "bluetooth_watchdog"
+CONF_INVALID_CODE_ALERT = "invalid_code_alert"
+CONF_COUNT = "count"
+CONF_WINDOW = "window"
 CONF_DEBUG = "debug"
 CONF_DEBUG_CONNECT = "connect"
 CONF_DEBUG_COMMUNICATION = "communication"
@@ -124,6 +134,13 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_QUERY_INTERVAL_TIME_CONTROL, default="60min"): cv.positive_time_period_seconds,
             cv.Optional(CONF_KEYPAD_CONTROL, default=True): cv.boolean,
             cv.Optional(CONF_KEYPAD_PUBLISH_CODE, default=False): cv.boolean,
+            cv.Optional(CONF_KEYPAD_CHECK_CODE, default=False): cv.boolean,
+            cv.Optional(CONF_KEYPAD_DELETE_EXPIRED): cv.Schema(
+                {
+                    cv.Optional(CONF_AFTER, default="1h"): cv.positive_time_period_seconds,
+                    cv.Optional(CONF_NAME_PREFIX, default=""): cv.string_strict,
+                }
+            ),
             cv.Optional(CONF_MAX_KEYPAD_ENTRIES, default=100): cv.int_range(min=1, max=250),
             cv.Optional(CONF_MAX_AUTHORIZATION_ENTRIES, default=20): cv.int_range(min=1, max=100),
             cv.Optional(CONF_MAX_LOG_ENTRIES, default=5): cv.int_range(min=1, max=50),
@@ -136,6 +153,17 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_UPDATE_TIME, default=False): cv.boolean,
             cv.Optional(CONF_PUBLISH_MAINTENANCE, default=True): cv.boolean,
             cv.Optional(CONF_MQTT_LOG): logger.is_log_level,
+            cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
+            cv.Optional(CONF_BLE_DISCONNECT_TIMEOUT, default="2s"): cv.All(
+                cv.positive_time_period_milliseconds, cv.Range(max=cv.TimePeriod(seconds=20))
+            ),
+            cv.Optional(CONF_BLUETOOTH_WATCHDOG, default="30min"): cv.positive_time_period_seconds,
+            cv.Optional(CONF_INVALID_CODE_ALERT): cv.Schema(
+                {
+                    cv.Optional(CONF_COUNT, default=3): cv.int_range(min=2, max=20),
+                    cv.Optional(CONF_WINDOW, default="5min"): cv.positive_time_period_seconds,
+                }
+            ),
             cv.Optional(CONF_DEBUG): cv.Schema(
                 {
                     cv.Optional(CONF_DEBUG_CONNECT, default=False): cv.boolean,
@@ -155,6 +183,9 @@ _BASE_SCHEMA = (
 def _validate_update_time(config):
     if config[CONF_UPDATE_TIME] and CONF_TIME_ID not in config:
         raise cv.Invalid(f"{CONF_UPDATE_TIME} needs {CONF_TIME_ID}")
+    if CONF_KEYPAD_DELETE_EXPIRED in config and not (config[CONF_UPDATE_TIME] and CONF_TIME_ID in config):
+        # Expiry is judged by this ESP32's clock against times the Nuki device keeps in its own
+        raise cv.Invalid(f"{CONF_KEYPAD_DELETE_EXPIRED} needs {CONF_TIME_ID} and {CONF_UPDATE_TIME}: true")
     return config
 
 
@@ -231,6 +262,10 @@ async def to_code(config):
     cg.add(var.set_query_interval_time_control(config[CONF_QUERY_INTERVAL_TIME_CONTROL]))
     cg.add(var.set_keypad_control(config[CONF_KEYPAD_CONTROL]))
     cg.add(var.set_keypad_publish_code(config[CONF_KEYPAD_PUBLISH_CODE]))
+    cg.add(var.set_keypad_check_code(config[CONF_KEYPAD_CHECK_CODE]))
+    if expired := config.get(CONF_KEYPAD_DELETE_EXPIRED):
+        # At least a minute, so a code is never removed in the second it runs out
+        cg.add(var.set_keypad_delete_expired(max(60, expired[CONF_AFTER].total_seconds), expired[CONF_NAME_PREFIX]))
     cg.add(var.set_max_keypad_entries(config[CONF_MAX_KEYPAD_ENTRIES]))
     cg.add(var.set_max_auth_entries(config[CONF_MAX_AUTHORIZATION_ENTRIES]))
     cg.add(var.set_max_log_entries(config[CONF_MAX_LOG_ENTRIES]))
@@ -241,6 +276,11 @@ async def to_code(config):
     cg.add(var.set_ble_command_timeout(config[CONF_BLE_COMMAND_TIMEOUT]))
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
+    cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
+    cg.add(var.set_ble_disconnect_timeout(config[CONF_BLE_DISCONNECT_TIMEOUT]))
+    cg.add(var.set_bluetooth_watchdog(config[CONF_BLUETOOTH_WATCHDOG]))
+    if alert := config.get(CONF_INVALID_CODE_ALERT):
+        cg.add(var.set_invalid_code_alert(alert[CONF_COUNT], alert[CONF_WINDOW]))
     if CONF_MQTT_LOG in config:
         logger.request_log_listener()
         cg.add(var.set_mqtt_log_level(logger.LOG_LEVELS[config[CONF_MQTT_LOG]]))

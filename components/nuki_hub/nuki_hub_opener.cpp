@@ -949,6 +949,14 @@ void NukiHubOpener::process_log_() {
       this->publish_json_("/rollingLog", single, false);
       this->log_marker_ = log.index;
       this->publish_log_marker_();
+      if (log.loggingType == opener::LoggingType::KeypadAction) {
+        this->publish_event_("keypad", entry);
+      } else if (log.loggingType == opener::LoggingType::LockAction) {
+        this->publish_event_("action", entry);
+      }
+      if (log.loggingType == opener::LoggingType::DoorbellRecognition) {
+        this->publish_event_("ring", entry);
+      }
       if (log.loggingType == opener::LoggingType::DoorbellRecognition) {
         this->publish_ring_((log.data[0] & 3) == 0);
       }
