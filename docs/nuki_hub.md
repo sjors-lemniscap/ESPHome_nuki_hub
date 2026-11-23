@@ -14,6 +14,8 @@ ESPHome device.
 - [Additions to Nuki Hub's topics](#additions-to-nuki-hubs-topics)
 - [Command queue and results](#command-queue-and-results)
 - [ESPHome automations](#esphome-automations)
+- [Home Assistant](#home-assistant)
+- [Security](#security)
 - [Differences from Nuki Hub](#differences-from-nuki-hub)
 - [Test status](#test-status)
 
@@ -71,6 +73,13 @@ nuki_hub:
 | `pairing` | | Take over an existing pairing, see [Pairing](#pairing) |
 | `keypad_control` | `true` | Accept keypad commands |
 | `keypad_publish_code` | `false` | Include the codes themselves in `keypad/json` |
+| `keypad_check_code` | `false` | Allow the keypad `check` action, which tells whether a code belongs to a code id |
+| `keypad_delete_expired` | off | `after` (default `1h`) and `name_prefix`: delete time limited entries whose end lies longer ago than `after`, optionally only those whose name starts with the prefix. Needs `time_id` and `update_time` |
+| `invalid_code_alert` | off | `count` (default 3) and `window` (default `5min`): publish `event/invalidCodes` when that many wrong codes were entered within the window |
+| `log_marker_in_flash` | `false` | Keep the index of the last published log entry in flash instead of reading it back from the retained `lastRollingLog` |
+| `homeassistant_discovery` | `false` | `true` or a discovery prefix: announce the device to Home Assistant over MQTT |
+| `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
+| `ble_disconnect_timeout` | `2s` | How long the Bluetooth connection is kept open after a command, for the next one |
 | `publish_activity_log` | `true` | Publish `log`, `shortLog`, `rollingLog` |
 | `max_keypad_entries` | `100` | Entries read from the keypad |
 | `max_authorization_entries` | `20` | Authorizations read |
@@ -211,6 +220,53 @@ result, so several clients can tell their own commands apart.
 
 `keypad/json` is still published after the commands are through and stays the reference.
 
+**Batch.** Several keypad commands in one message on `keypad/batchJson`, one combined answer
+on `keypad/batchResult` (at most 50 commands):
+
+```json
+{"requestId":"b1","commands":[{"action":"add","name":"booking_1","code":345678},{"action":"delete","codeId":7}]}
+{"requestId":"b1","result":"partial","succeeded":1,"failed":1,"durationMs":911,"results":[{"index":0,"action":"add","name":"booking_1","result":"success","codeId":105},{"index":1,"action":"delete","result":"noExistingCodeIdSet","codeId":7}]}
+```
+
+**Sync.** The wanted state of all entries whose name starts with a prefix, on `keypad/syncJson`:
+
+```json
+{"requestId":"s1","prefix":"booking_","entries":[{"name":"booking_1","code":345678,"enabled":1,"timeLimited":1,"allowedFrom":"2026-09-17 08:00:00","allowedUntil":"2026-09-17 10:00:00"}]}
+```
+
+The keypad is read, missing entries are added, differing ones updated, and entries with the
+prefix that are not in the list deleted. Entries with other names are never touched, and the
+prefix must have at least three characters. `"dryRun":true` only reports what would happen.
+The answer on `keypad/syncResult` has `adds`, `updates`, `deletes`, `unchanged` and the
+results of the commands like a batch.
+
+**Deadline.** `"timeoutMs"` in a keypad command: if the command waited in the queue longer
+than that, it is answered with `expired` and not executed.
+
+**Repeated add.** An `add` the device refuses because the code exists is answered with
+`success`, `"existed":true` and the id of the entry, if that entry has the same name and
+code: the answer to an earlier attempt was lost, the entry is there.
+
+**Events**, not retained, one per new activity log entry: `event/keypad` (a code or
+fingerprint was used, or refused), `event/action` (a lock action), `event/ring` (Opener: the
+bell). The payload is the log entry as on `rollingLog`, with `time` as one string.
+`event/invalidCodes` with `invalid_code_alert`.
+
+**`query/logRange`**: `{"from":100,"to":120}` reads log entries by index (at most 100), the
+answer comes on `logRange`.
+
+**`query/authorizations`, `query/timecontrol`, `query/fingerprints`**: `1` reads the list
+again. Fingerprints (Keypad 2) are published on `fingerprint/json` on request only.
+
+**Continuous mode for a time** (Opener): `{"action":"activateCM","timeout":30}` on `action`
+switches it on for 30 minutes.
+
+**`audit`**, not retained: every answered command, whatever its kind, with `command`,
+`action`, `result` and `requestId`.
+
+**`bluetoothJson`**, retained, once a minute: commands since boot, failures, retries, average
+and longest duration.
+
 **`status`**, retained, once a minute and when the availability changes:
 
 ```json
@@ -262,14 +318,74 @@ button:
 | `nuki_hub.paired` | Condition: a pairing is stored |
 | `nuki_hub.available` | Condition: the Nuki device answered the last commands and is advertising |
 
+## Home Assistant
+
+Three ways, which can be combined:
+
+- **MQTT discovery** (`homeassistant_discovery: true`): a lock, battery and ring binary
+  sensors, signal, state, last user and keypad entry count, announced below `homeassistant/`.
+- **ESPHome API**: `lock`, `binary_sensor`, `sensor` and `text_sensor` platforms.
+- **Automations** on the ESP32 itself, see above.
+
+```yaml
+api:
+
+lock:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    name: Entrance
+
+binary_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    available:
+      name: Entrance available
+    battery_critical:
+      name: Entrance battery critical
+    keypad_battery_critical:
+      name: Entrance keypad battery critical
+    ring:
+      name: Entrance bell
+
+sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    rssi:
+      name: Entrance signal
+    keypad_entries:
+      name: Entrance keypad entries
+
+text_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    state:
+      name: Entrance state
+    last_user:
+      name: Entrance last user
+```
+
+If Home Assistant is not always connected, set `api: reboot_timeout: 0s`: ESPHome otherwise
+restarts the ESP32 after 15 minutes without an API client.
+
+## Security
+
+- **Broker access.** Whoever may publish to `<prefix>/opener/action` can open the door, and
+  whoever may read `keypad/json` with `keypad_publish_code` sees the codes. Give every room
+  its own broker user and restrict the topics with the broker's access control list.
+- **Encryption.** ESPHome's `mqtt:` supports TLS (`certificate_authority`, with the ESP-IDF
+  framework). On an open network use it.
+- **The pairing key** in `secrets.yaml` and in the ESP32's flash opens the door like a
+  paired phone does. Keep the file private; flash encryption protects the copy on the chip.
+- **The security PIN** is never logged by this component. The `debug: connect` option of the
+  Bluetooth code does log it, leave that off outside the workbench.
+
 ## Differences from Nuki Hub
 
 - No web configurator: settings are in the YAML. Firmware updates are ESPHome's OTA.
-- No Home Assistant discovery over MQTT. Use the lock entity over the ESPHome API, or
-  ESPHome's own MQTT discovery for it.
+- Home Assistant discovery over MQTT covers the main entities, not every setting.
 - No per-entry topics (`keypad/codes/N`, `authorization/entries/N`) and no single value
   topics next to the JSON ones.
-- `authorization/action` cannot add an authorization, `keypad/actionJson` has no `check`.
+- `authorization/action` cannot add an authorization.
 - No hybrid mode (official MQTT of Smart Lock 4/5), GPIO lock control, HTTP bridge API.
 - An accepted lock action is given 15 seconds (an Opener: the strike duration plus 5 seconds)
   to report its completion instead of the command timeout, so an action is not repeated
