@@ -1,0 +1,19 @@
+name: Unit Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: ArduinoJson headers
+        run: git clone --depth 1 --branch v7.4.2 https://github.com/bblanchon/ArduinoJson.git "$RUNNER_TEMP/ArduinoJson"
+
+      - name: Run
+        run: ARDUINOJSON_DIR="$RUNNER_TEMP/ArduinoJson/src" python3 -W error -m unittest discover -s tests -v
