@@ -89,6 +89,8 @@ nuki_hub:
 | `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
 | `fast_connection` | `true` | Ask for a short Bluetooth connection interval (7.5 to 15 ms) while connected. Commands get faster, see [measurements](benchmarks.md) |
 | `ble_disconnect_timeout` | `2s` | How long the Bluetooth connection is kept open after a command, for the next one |
+| `keep_connected` | `false` | Never close the Bluetooth connection. Every command is then as fast as one that follows another (see [measurements](benchmarks.md#the-first-command-after-a-pause)), at the cost of the Nuki device's batteries: it answers about 65 times a second instead of sending an advertisement about twice a second. For a while only, a client writes the seconds to `connection/hold` |
+| `challenge_prefetch` | on for an Opener, off for a Smart Lock | Ask for the challenge of the next command when one is done, so the next one goes out at once. Not tried on a Smart Lock. Switches itself off until the restart when the device refuses two commands sent this way |
 | `publish_activity_log` | `true` | Publish `log`, `shortLog`, `rollingLog` |
 | `max_keypad_entries` | `100` | Entries read from the keypad |
 | `max_authorization_entries` | `20` | Authorizations read |

@@ -131,6 +131,13 @@ fingerprint was used, or refused), `event/action` (a lock action), `event/ring` 
 bell). The payload is the log entry as on `rollingLog`, with `time` added as one string.
 `event/invalidCodes` with `invalid_code_alert`: `{"count":3,"windowSeconds":300}`.
 
+**`connection/hold`**: a number of seconds (at most 3600) to keep the Bluetooth connection
+open from now on, `0` lets go of it. Without it the connection is closed two seconds after a
+command, and the next command first waits for the device to advertise, a few hundred
+milliseconds and sometimes more. A client that knows commands are coming (someone opened the
+page with the door buttons) writes this first. Answered with `0` when the time is over. It
+costs the device battery while it lasts, see `keep_connected`.
+
 **`query/logRange`**: `{"from":100,"to":120,"requestId":"l1"}` reads log entries by index (at
 most 100). The answer on `logRange` has `from`, `to` and `entries`, or one of the refusals
 `invalidRange`, `rangeTooLarge`, `notPaired`, `noValidPinSet`.

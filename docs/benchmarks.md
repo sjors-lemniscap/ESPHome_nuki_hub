@@ -3,18 +3,18 @@
 All on one rig: ESP32-S3 (8 MB PSRAM) on Wi-Fi, a Nuki Opener (firmware 1.12.4, hardware
 4.17) with a Keypad 2 about a metre away, MQTT broker on the local network. Times are what
 a client sees over MQTT: from publishing a command to receiving its result. Measured on
-2026-11-23 with `tests/rig/benchmark.js` and the harness of the booking system that uses
+2026-11-24 with `tests/rig/benchmark.js` and the harness of the booking system that uses
 these topics.
 
 ## Single commands
 
 | Operation | average | median | 95% | slowest |
 | --- | --- | --- | --- | --- |
-| Keypad add | 191 ms | 194 ms | 254 ms | 254 ms |
-| Keypad update | 223 ms | 207 ms | 478 ms | 478 ms |
-| Keypad delete | 213 ms | 201 ms | 402 ms | 402 ms |
-| State read, connection open | 221 ms | 217 ms | 284 ms | 284 ms |
-| Keypad list read, new connection | 1947 ms | 1458 ms | 3415 ms | 3415 ms |
+| Keypad add | 148 ms | 148 ms | 205 ms | 205 ms |
+| Keypad update | 144 ms | 113 ms | 508 ms | 508 ms |
+| Keypad delete | 123 ms | 110 ms | 194 ms | 194 ms |
+| State read, connection open | 236 ms | 239 ms | 292 ms | 292 ms |
+| Keypad list read, new connection | 1046 ms | 1098 ms | 1453 ms | 1453 ms |
 
 20 commands each, 10 for the reads, with `keypad_fast_list: true`.
 
@@ -25,9 +25,9 @@ these topics.
 
 | Operation | average | median | slowest |
 | --- | --- | --- | --- |
-| Keypad add | 181 ms | 170 ms | 257 ms |
-| Keypad update | 167 ms | 154 ms | 257 ms |
-| Keypad delete | 169 ms | 163 ms | 205 ms |
+| Keypad add (the first one opens the connection) | 223 ms | 149 ms | 902 ms |
+| Keypad update | 129 ms | 110 ms | 166 ms |
+| Keypad delete | 109 ms | 104 ms | 146 ms |
 
 A little faster than over MQTT, which has the broker in between.
 
@@ -35,9 +35,9 @@ A little faster than over MQTT, which has the broker in between.
 
 | Operation | total | per command |
 | --- | --- | --- |
-| 20 adds as one batch | 2.7 s | 133 ms |
-| 20 deletes as one batch | 2.6 s | 131 ms |
-| Sync that adds 20 entries (reads the list first) | 3.1 s | 153 ms |
+| 20 adds as one batch | 2.5 s | 126 ms |
+| 20 deletes as one batch | 2.4 s | 118 ms |
+| Sync that adds 20 entries (reads the list first) | 2.8 s | 138 ms |
 | Sync with nothing to do (reads the list) | 1.2 s | |
 | Sync that deletes 20 entries | 3.4 s | 172 ms |
 
@@ -73,6 +73,40 @@ Packets are not the limit (the Opener agrees to 247 bytes, a command fits in one
 writing without waiting for an acknowledgement gained nothing. Keeping Wi-Fi out of power
 save while commands arrive gained nothing either. What QoS 1 costs is explained with the
 [results](topics.md#command-queue-and-results).
+
+Since then (2026-11-24) the challenge of the next command is asked for when a command is
+done (`challenge_prefetch`), and is there when the next one arrives:
+
+| Keypad update on an open connection | client | ESP32 |
+| --- | --- | --- |
+| Challenge asked for when the command arrives | 220-235 ms | 130-135 ms |
+| Challenge asked for ahead | 148 ms | 75 ms |
+
+The Opener takes a challenge that is seconds old, and one with a status read in between. In
+a batch the commands follow each other without a pause, so there is nothing to ask ahead in:
+a batch of 20 stays at 2.4 to 2.5 s.
+
+## The first command after a pause
+
+Two seconds after a command the connection is closed. The next command then has to wait
+until the Opener advertises (about every 0.4 s in its advertising mode Normal) and the
+ESP32 hears it. Time on the ESP32 for a keypad update, with `tests/rig` probes:
+
+| | median | range |
+| --- | --- | --- |
+| Before: the radio listened 30 ms of every 60 ms for the advertisement | 1180 ms | 720-3110 ms |
+| Listening without gaps | 640 ms | 240-1130 ms |
+| Connection held open (`keep_connected` or `connection/hold`) | 70 ms | 67-81 ms |
+
+Finding the services again is not part of it: the stack remembers them, that step takes no
+measurable time. The Opener closes a connection by itself after about ten seconds without
+traffic, so a held connection asks for a fresh challenge every five seconds, which is also
+the one the next command uses.
+
+What remains for a client on Wi-Fi is the network: 70 ms on this rig while commands follow
+each other, 170 to 230 ms for the first one after a pause, because Wi-Fi power saving
+(needed while Bluetooth is on) lets a packet wait for the next beacon. Wired Ethernet does
+not have that.
 
 ## Under load
 

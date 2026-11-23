@@ -270,6 +270,7 @@ void NukiBle::update_connection_state() {
 // requested but no CLOSE_EVT ever arrived within BLEClientBase's safety timeout - the
 // latter replaces the original NimBLE-era "didn't disconnect within ~5s" detection.
 void NukiBle::on_disconnect_complete(esp_err_t reason) {
+  this->challenge_prefetch_ = ChallengePrefetch::None;
   this->gdio_char_ = nullptr;
   this->usdio_char_ = nullptr;
   this->notify_registered_ = false;
@@ -1192,6 +1193,10 @@ bool NukiBle::send_encrypted_message(Command commandIdentifier, const unsigned c
   # 24 byte #    4 byte       # 2 byte  #      4 byte              #       2 byte       #  n byte # 2 byte #
   */
 
+  if (!this->challenge_prefetch_sending_ && commandIdentifier != Command::RequestData) {
+    // The challenge is used up by the command that takes it. A read in between leaves it valid.
+    this->challenge_prefetch_ = ChallengePrefetch::None;
+  }
   //compose plain data
   unsigned char plainData[6 + payloadLen] = {};
   unsigned char plainDataWithCrc[8 + payloadLen] = {};
@@ -1549,6 +1554,9 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::Challenge : {
       memcpy(this->challenge_nonce_k_, data, 32);
+      if (this->challenge_prefetch_ == ChallengePrefetch::Sent) {
+        this->challenge_prefetch_ = ChallengePrefetch::Ready;
+      }
       print_buffer((uint8_t*)data, dataLen, false, "Challenge", this->debug_nuki_hex_data_);
       break;
     }
@@ -1724,6 +1732,72 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     default:
       ESP_LOGE(TAG, "UNKNOWN RETURN COMMAND: %04x", (unsigned int)returnCode);
+  }
+}
+
+void NukiBle::prefetch_challenge(bool refresh) {
+  if (!this->challenge_prefetch_active() || this->pairing_mode_ || !this->is_paired_ ||
+      this->nuki_command_state_ != CommandState::Idle || !(this->connected() && this->notify_registered_)) {
+    return;
+  }
+  const int64_t now = esp_timer_get_time() / 1000;
+  if (this->challenge_prefetch_ == ChallengePrefetch::Sent && now - this->challenge_prefetch_at_ < 500) {
+    return;
+  }
+  if (this->challenge_prefetch_ == ChallengePrefetch::Ready && !refresh) {
+    return;
+  }
+  // The mark of the challenge this one replaces must not be taken for its arrival
+  this->last_msg_code_received_ = Command::Empty;
+  unsigned char payload[sizeof(Command)] = {0x04, 0x00};  // challenge
+  this->challenge_prefetch_sending_ = true;
+  const bool sent = this->send_encrypted_message(Command::RequestData, payload, sizeof(Command));
+  this->challenge_prefetch_sending_ = false;
+  this->challenge_prefetch_ = sent ? ChallengePrefetch::Sent : ChallengePrefetch::None;
+  this->challenge_prefetch_at_ = now;
+}
+
+// Opens the connection like BLEClientBase::connect(), with one difference: while it waits
+// for the device to advertise, the radio listens all the time. Bluedroid's default listens
+// 30 ms of every 60 ms and so misses half of the advertisements - a Nuki device sends one
+// every 0.4 s or slower, which made the first command after a pause wait a second or more.
+void NukiBle::connect() {
+  using esphome::esp32_ble_tracker::ClientState;
+  if (!this->fast_connection_ || this->gattc_if_ == ESP_GATT_IF_NONE || this->state() == ClientState::CONNECTING ||
+      this->state() == ClientState::CONNECTED || this->state() == ClientState::ESTABLISHED ||
+      this->state() == ClientState::DISCONNECTING) {
+    // Nothing to open, or the plain way was asked for: the base class handles and logs it
+    esphome::esp32_ble_client::BLEClientBase::connect();
+    return;
+  }
+  ESP_LOGI(TAG, "Connecting, listening without gaps");
+  this->challenge_prefetch_ = ChallengePrefetch::None;
+  this->paired_ = false;
+  this->services_released_ = false;
+  this->pending_notify_regs_ = 0;
+  this->conn_id_ = esphome::esp32_ble_client::UNSET_CONN_ID;
+  this->enable_loop();
+  this->set_state(ClientState::CONNECTING);
+
+  esp_ble_conn_params_t params{};
+  params.scan_interval = 0x30;  // 30 ms
+  params.scan_window = 0x30;    // all of it
+  params.interval_min = 0x06;   // 7.5 ms
+  params.interval_max = 0x0C;   // 15 ms
+  params.latency = 0;
+  params.supervision_timeout = 400;  // 4 s
+  esp_ble_gatt_creat_conn_params_t request{};
+  memcpy(request.remote_bda, this->remote_bda_, ESP_BD_ADDR_LEN);
+  request.remote_addr_type = this->remote_addr_type_;
+  request.is_direct = true;
+  request.is_aux = false;
+  request.own_addr_type = (esp_ble_addr_type_t) 0xff;  // the stack's own
+  request.phy_mask = ESP_BLE_PHY_1M_PREF_MASK;
+  request.phy_1m_conn_params = &params;
+  const esp_err_t result = esp_ble_gattc_enh_open(this->gattc_if_, &request);
+  if (result != ESP_OK) {
+    ESP_LOGW(TAG, "esp_ble_gattc_enh_open failed: %d", result);
+    this->set_state(ClientState::IDLE);
   }
 }
 

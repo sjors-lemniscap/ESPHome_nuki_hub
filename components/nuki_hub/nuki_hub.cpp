@@ -126,6 +126,7 @@ void NukiHubComponent::setup() {
   ble->set_event_handler(this);
   ble->initialize();
   ble->set_disconnect_timeout(this->ble_disconnect_timeout_);
+  ble->set_challenge_prefetch(this->challenge_prefetch_);
   ble->set_fast_connection(this->fast_connection_);
   ble->set_general_timeout(this->ble_general_timeout_);
   ble->set_command_timeout(this->ble_command_timeout_);
@@ -507,6 +508,23 @@ void NukiHubComponent::register_handlers_() {
     this->handle_keypad_action_(payload);
   });
   // {"from": 100, "to": 120, "requestId": "..."}: log entries by index, on logRange
+  // Seconds to keep the connection open from now, 0 lets go of it
+  this->subscribe_("/connection/hold", [this](const std::string &payload) {
+    char *end = nullptr;
+    const long seconds = strtol(payload.c_str(), &end, 10);
+    if (end == payload.c_str() || seconds < 0) {
+      return;
+    }
+    if (seconds == 0) {
+      if (this->hold_active_) {
+        this->hold_active_ = false;
+      }
+      return;
+    }
+    this->hold_active_ = true;
+    this->hold_until_ = millis() + (uint32_t) std::min<long>(seconds, 3600) * 1000;
+    this->last_keep_alive_ = millis() - 10000;
+  });
   this->subscribe_("/query/logRange", [this](const std::string &payload) {
     if (is_placeholder(payload) || payload == "0") {
       return;
@@ -1087,6 +1105,42 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
   if (done) {
     done(result);
   }
+  if (result == CmdResult::Success) {
+    // The next command will want a challenge: ask for it while nothing else is going on
+    this->ble()->prefetch_challenge();
+  }
+}
+
+// Keeps the connection open while it is held: the device ends one that is silent for about
+// ten seconds, so something small is exchanged every five. Costs the device battery.
+void NukiHubComponent::service_connection_hold_(uint32_t now) {
+  if (this->hold_active_ && (int32_t) (now - this->hold_until_) >= 0) {
+    this->hold_active_ = false;
+    this->publish_("/connection/hold", "0", false);
+  }
+  if (!this->keep_connected_ && !this->hold_active_) {
+    return;
+  }
+  NukiBle *ble = this->ble();
+  if (!ble->is_paired_with_lock() || this->op_active_ || !this->queue_.empty()) {
+    this->last_keep_alive_ = now;
+    return;
+  }
+  if (ble->connected()) {
+    ble->hold_connection();
+    if (now - this->last_keep_alive_ >= 5000) {
+      this->last_keep_alive_ = now;
+      if (ble->challenge_prefetch_active()) {
+        ble->prefetch_challenge(true);
+      } else {
+        this->want_state_ = true;
+      }
+    }
+  } else if (now - this->last_keep_alive_ >= 10000) {
+    // Reading the state opens the connection again
+    this->last_keep_alive_ = now;
+    this->want_state_ = true;
+  }
 }
 
 void NukiHubComponent::loop() {
@@ -1132,6 +1186,7 @@ void NukiHubComponent::loop() {
   }
 #endif
   this->flush_outbox_();
+  this->service_connection_hold_(now);
   if (this->discovery_pending_ && now - this->discovery_at_ >= 150) {
     this->publish_discovery_(this->discovery_nuki_id_, this->discovery_device_name_, this->discovery_firmware_);
   }

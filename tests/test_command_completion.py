@@ -68,6 +68,10 @@ class NukiBle {
   uint8_t error_code_ = 0;
   uint8_t challenge_nonce_k_[32] = {};
   int64_t time_now_ = 100;
+  enum class ChallengePrefetch : uint8_t { None, Sent, Ready };
+  ChallengePrefetch challenge_prefetch_{ChallengePrefetch::None};
+  bool challenge_prefetch_used_{false};
+  int64_t challenge_prefetch_at_{0};
   uint32_t command_timeout_duration_ = 3000;
   uint32_t action_timeout_duration_ = 10000;
 };

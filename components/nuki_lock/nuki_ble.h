@@ -118,6 +118,19 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     void set_fast_connection(bool enable) { this->fast_connection_ = enable; }
     /// Where the exchange of the command in progress stands
     CommandState get_command_state() const { return this->nuki_command_state_; }
+
+    /// Every command but a plain read starts by asking the device for a challenge. With this
+    /// on, that question is asked ahead, when the previous command is done, and the next
+    /// command goes out the moment it arrives: one exchange less to wait for.
+    void set_challenge_prefetch(bool enable) { this->challenge_prefetch_enabled_ = enable; }
+    /// Off too once the device refused commands that used a challenge asked for ahead
+    bool challenge_prefetch_active() const {
+      return this->challenge_prefetch_enabled_ && this->challenge_prefetch_strikes_ < 2;
+    }
+    /// Asks for the challenge of the next command. `refresh` replaces one already there.
+    void prefetch_challenge(bool refresh = false);
+    /// Keeps the connection from being closed for being idle, for another timeout
+    void hold_connection() { this->extend_disconnect_timeout(); }
     /// The interval of the connection as it is now, in units of 1.25 ms (0: not known)
     uint16_t get_connection_interval();
     
@@ -454,6 +467,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * (it does so for clients that connect to changing devices). This client always talks to
      * the same device and would never find it again, so the address is kept.
      */
+    void connect() override;
     void disconnect() override;
 
     /// The error code of the last error report of the device (see the ErrorCode enums)
@@ -692,6 +706,14 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
 
     CommandState nuki_command_state_ = CommandState::Idle;
 
+    enum class ChallengePrefetch : uint8_t { None, Sent, Ready };
+    ChallengePrefetch challenge_prefetch_{ChallengePrefetch::None};
+    bool challenge_prefetch_enabled_{false};
+    bool challenge_prefetch_sending_{false};
+    bool challenge_prefetch_used_{false};
+    uint8_t challenge_prefetch_strikes_{0};
+    int64_t challenge_prefetch_at_{0};
+
     bool is_paired_ = false;
 
     SmartlockEventHandler* event_handler_;
@@ -795,6 +817,35 @@ CmdResult NukiBle::execute_action(const TDeviceAction action) {
     return CmdResult::Failed;
   }
 
+  if (result != CmdResult::Working && this->challenge_prefetch_used_) {
+    this->challenge_prefetch_used_ = false;
+    if (result == CmdResult::Success) {
+      this->challenge_prefetch_strikes_ = 0;
+    } else if (result == CmdResult::TimeOut || (result == CmdResult::Failed && this->error_code_ == 0x22)) {
+      // 0x22: the device did not take the challenge
+      this->challenge_prefetch_strikes_++;
+      ESP_LOGW(HPP_TAG, "A command with a challenge asked for ahead was not taken%s",
+               this->challenge_prefetch_strikes_ >= 2 ? ", asking ahead is off until the restart" : "");
+    }
+  }
+  if (result == CmdResult::Success) {
+    // After a change nothing more comes from the device (a list request is followed by its
+    // entries), and in a batch the next change follows at once
+    switch (action.command) {
+      case Command::AddKeypadCode:
+      case Command::UpdateKeypadCode:
+      case Command::RemoveKeypadCode:
+      case Command::UpdateAuthorization:
+      case Command::RemoveUserAuthorization:
+      case Command::AddTimeControlEntry:
+      case Command::UpdateTimeControlEntry:
+      case Command::RemoveTimeControlEntry:
+        this->prefetch_challenge();
+        break;
+      default:
+        break;
+    }
+  }
   if (result != CmdResult::Working && (result == CmdResult::Error || result == CmdResult::Failed)) {
     this->disconnect();
   }
@@ -806,6 +857,12 @@ CmdResult NukiBle::cmd_state_machine(const TDeviceAction action) {
   this->extend_disconnect_timeout();
   switch (this->nuki_command_state_) {
     case CommandState::Idle: {
+      if (this->challenge_prefetch_ == ChallengePrefetch::Sent &&
+          (esp_timer_get_time() / 1000) - this->challenge_prefetch_at_ < 500) {
+        // A challenge asked for ahead is on its way; its arrival must not be taken for the
+        // answer to this read
+        return CmdResult::Working;
+      }
       if (this->debug_nuki_communication_) {
         ESP_LOGD(HPP_TAG, "Sending command: %u", (unsigned int)action.command);
       }
@@ -880,6 +937,23 @@ CmdResult NukiBle::cmd_chall_state_machine(const TDeviceAction action, const boo
   this->extend_disconnect_timeout();
   switch (this->nuki_command_state_) {
     case CommandState::Idle: {
+      if (this->challenge_prefetch_ == ChallengePrefetch::Ready) {
+        // Asked for ahead and already here
+        this->challenge_prefetch_ = ChallengePrefetch::None;
+        this->challenge_prefetch_used_ = true;
+        this->nuki_command_state_ = CommandState::ChallengeRespReceived;
+        return CmdResult::Working;
+      }
+      if (this->challenge_prefetch_ == ChallengePrefetch::Sent &&
+          (esp_timer_get_time() / 1000) - this->challenge_prefetch_at_ < 500) {
+        // Asked for ahead and on its way: wait for that one
+        this->challenge_prefetch_ = ChallengePrefetch::None;
+        this->challenge_prefetch_used_ = true;
+        this->time_now_ = (esp_timer_get_time() / 1000);
+        this->nuki_command_state_ = CommandState::ChallengeSent;
+        return CmdResult::Working;
+      }
+      this->challenge_prefetch_used_ = false;
       if (this->debug_nuki_communication_) {
         ESP_LOGD(HPP_TAG, "Sending challenge");
       }
@@ -1015,6 +1089,23 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
   this->extend_disconnect_timeout();
   switch (this->nuki_command_state_) {
     case CommandState::Idle: {
+      if (this->challenge_prefetch_ == ChallengePrefetch::Ready) {
+        // Asked for ahead and already here
+        this->challenge_prefetch_ = ChallengePrefetch::None;
+        this->challenge_prefetch_used_ = true;
+        this->nuki_command_state_ = CommandState::ChallengeRespReceived;
+        return CmdResult::Working;
+      }
+      if (this->challenge_prefetch_ == ChallengePrefetch::Sent &&
+          (esp_timer_get_time() / 1000) - this->challenge_prefetch_at_ < 500) {
+        // Asked for ahead and on its way: wait for that one
+        this->challenge_prefetch_ = ChallengePrefetch::None;
+        this->challenge_prefetch_used_ = true;
+        this->time_now_ = (esp_timer_get_time() / 1000);
+        this->nuki_command_state_ = CommandState::ChallengeSent;
+        return CmdResult::Working;
+      }
+      this->challenge_prefetch_used_ = false;
       if (this->debug_nuki_communication_) {
         ESP_LOGD(HPP_TAG, "Sending challenge");
       }

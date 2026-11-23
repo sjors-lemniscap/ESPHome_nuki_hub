@@ -59,6 +59,8 @@ CONF_HOMEASSISTANT_DISCOVERY = "homeassistant_discovery"
 CONF_NUKI_HUB_ID = "nuki_hub_id"
 CONF_BLE_DISCONNECT_TIMEOUT = "ble_disconnect_timeout"
 CONF_FAST_CONNECTION = "fast_connection"
+CONF_KEEP_CONNECTED = "keep_connected"
+CONF_CHALLENGE_PREFETCH = "challenge_prefetch"
 CONF_BLUETOOTH_WATCHDOG = "bluetooth_watchdog"
 CONF_INVALID_CODE_ALERT = "invalid_code_alert"
 CONF_COUNT = "count"
@@ -185,6 +187,9 @@ _BASE_SCHEMA = (
             ),
             cv.Optional(CONF_BLUETOOTH_WATCHDOG, default="30min"): cv.positive_time_period_seconds,
             cv.Optional(CONF_FAST_CONNECTION, default=True): cv.boolean,
+            cv.Optional(CONF_KEEP_CONNECTED, default=False): cv.boolean,
+            # Without a value: on for an Opener, off for a Smart Lock (not tried on one)
+            cv.Optional(CONF_CHALLENGE_PREFETCH): cv.boolean,
             cv.Optional(CONF_INVALID_CODE_ALERT): cv.Schema(
                 {
                     cv.Optional(CONF_COUNT, default=3): cv.int_range(min=2, max=20),
@@ -326,6 +331,8 @@ async def to_code(config):
         cg.add(var.set_homeassistant_discovery("homeassistant" if discovery is True else discovery))
     cg.add(var.set_ble_disconnect_timeout(config[CONF_BLE_DISCONNECT_TIMEOUT]))
     cg.add(var.set_fast_connection(config[CONF_FAST_CONNECTION]))
+    cg.add(var.set_keep_connected(config[CONF_KEEP_CONNECTED]))
+    cg.add(var.set_challenge_prefetch(config.get(CONF_CHALLENGE_PREFETCH, config[CONF_TYPE] == TYPE_OPENER)))
     cg.add(var.set_bluetooth_watchdog(config[CONF_BLUETOOTH_WATCHDOG]))
     if alert := config.get(CONF_INVALID_CODE_ALERT):
         cg.add(var.set_invalid_code_alert(alert[CONF_COUNT], alert[CONF_WINDOW]))
