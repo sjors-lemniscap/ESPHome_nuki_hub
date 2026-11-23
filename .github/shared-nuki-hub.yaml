@@ -27,6 +27,10 @@ time:
 mqtt:
   broker: 192.168.1.10
   discovery: false
+  # A publish must not hold up the main loop when the connection to the broker stalls
+  idf_send_async: true
+  # ESPHome would publish its whole debug log on <topic_prefix>/debug otherwise
+  log_topic: null
 
 external_components:
   - source:

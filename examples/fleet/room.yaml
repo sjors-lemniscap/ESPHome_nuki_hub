@@ -37,6 +37,10 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
   discovery: false
+  # A publish must not hold up the main loop when the connection to the broker stalls
+  idf_send_async: true
+  # ESPHome would publish its whole debug log on <topic_prefix>/debug otherwise
+  log_topic: null
   topic_prefix: ${room}/esphome
   birth_message:
     topic: ${room}/maintenance/mqttConnectionState

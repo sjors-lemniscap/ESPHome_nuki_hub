@@ -373,6 +373,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool fast_connection_{true};
   // Runs the main loop without pause while a command is on its way
   HighFrequencyLoopRequester high_frequency_;
+  uint32_t high_frequency_since_{0};
   uint32_t bluetooth_watchdog_{0};
   uint32_t last_success_{0};
   uint8_t invalid_code_alert_count_{0};

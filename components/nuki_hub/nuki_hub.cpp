@@ -488,8 +488,10 @@ void NukiHubComponent::on_mqtt_connected_() {
   this->log_marker_deadline_ = millis() + 3000;
   this->discovery_published_ = false;
 
-  // What happened while the broker was away was not published: read everything again
-  if (this->mqtt_connects_++ > 0 && this->is_paired()) {
+  // What was read before the broker was there, or while it was away, was not published:
+  // read everything again
+  this->mqtt_connects_++;
+  if (this->is_paired()) {
     this->want_state_ = this->want_config_ = this->want_battery_ = true;
     this->want_keypad_ = this->want_auth_ = this->want_time_control_ = true;
     this->want_log_ = this->publish_auth_log_;
@@ -898,10 +900,16 @@ void NukiHubComponent::loop() {
   if (this->unpair_requested_) {
     this->do_unpair_();
   }
-  if (ble->is_paired_with_lock() && (busy || !this->queue_.empty())) {
+  // Running without pause keeps every lower priority task of the system from running, the
+  // idle task that feeds the watchdog among them: a command that waits five seconds for the
+  // device would end in a watchdog reset. So the loop takes its normal pause a few times a
+  // second, which costs a command a few milliseconds.
+  const bool want_fast = ble->is_paired_with_lock() && (busy || !this->queue_.empty());
+  if (want_fast && now - this->high_frequency_since_ < 200) {
     this->high_frequency_.start();
   } else {
     this->high_frequency_.stop();
+    this->high_frequency_since_ = now;
   }
   if (now - this->last_loop_ < (busy ? 2 : 100)) {
     return;

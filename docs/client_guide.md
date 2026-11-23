@@ -30,6 +30,9 @@ receive   <prefix>/opener/keypad/result       {"requestId":"k1","action":"add","
     that did arrive is recognised and answered with `"existed":true`.
   - `expired`: the command waited longer than its `timeoutMs`. Nothing was changed.
   - anything else (`noValidCodeSet`, `noExistingCodeIdSet`, ...): the command itself was wrong.
+- A result can arrive twice. Results are sent so that they arrive at least once, and after a
+  short Wi-Fi stall the broker may deliver the same message again. Ignore a `requestId` that
+  was answered already.
 - Set `timeoutMs` to what the client is prepared to wait. A command that the client has
   given up on is then not executed late.
 

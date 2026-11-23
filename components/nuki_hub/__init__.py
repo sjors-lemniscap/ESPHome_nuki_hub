@@ -228,6 +228,11 @@ def _final_validate(config):
         LOGGER.warning("nuki_hub: no mqtt: component configured, the Nuki Hub topics are not available.")
         return config
     mqtt_conf = full_config.get("mqtt", {})
+    if not mqtt_conf.get("idf_send_async", False):
+        LOGGER.warning(
+            "nuki_hub: set 'idf_send_async: true' in mqtt:. Without it a publish waits for the network, and a "
+            "stalled connection to the broker can hold the main loop until the watchdog restarts the ESP32."
+        )
     if mqtt_conf.get("discovery", True) is not False and "api" in full_config:
         LOGGER.warning("nuki_hub: consider 'discovery: false' in mqtt: to not announce all entities over MQTT as well.")
     return config

@@ -55,6 +55,8 @@ esp32_ble_tracker:
 mqtt:
   broker: 192.168.1.10
   discovery: false
+  log_topic: null        # ESPHome's own debug log over MQTT is not needed
+  idf_send_async: true   # a publish must not wait for the network, see below
 
 nuki_hub:
   - id: entrance
@@ -103,6 +105,13 @@ nuki_hub:
 | `publish_maintenance` | `true` | Publish the `<prefix>/maintenance/...` and `<prefix>/info/...` topics |
 | `mqtt_log` | off | A log level (`INFO`, `DEBUG`, ...): publish the log lines up to that level on `<prefix>/maintenance/log`, one line per message, like Nuki Hub's "MQTT logging" |
 | `debug` | | `connect`, `communication`, `readable_data`, `hex_data`, `command`: extra logging of the Bluetooth protocol |
+
+Set **`idf_send_async: true`** in `mqtt:`. Without it every publish waits until the message
+is on the network. If the connection to the broker stalls (seen on the test rig with a broker
+whose replies took another network path), the main loop of the ESP32 stands still with it,
+and after five seconds the watchdog restarts the ESP32, again and again for as long as the
+connection stays bad. With the option, messages are queued and the loop goes on. The
+component warns at build time if the option is missing.
 
 Nuki Hub's connection state is the last will of the MQTT connection and is set in the `mqtt:`
 block, see the example: `birth_message`/`will_message` on
@@ -308,9 +317,13 @@ Only one command at a time can travel over the Bluetooth link. Commands that arr
 another one is running wait in a queue (64 deep) and are answered one after the other, in the
 order they arrived; lock actions go first. A command that gets no answer is retried
 (`command_retries`). A command the device refuses is answered with `failed` right away.
-If the Nuki device cannot be reached within 10 seconds (out of range, without power, or
-another device holds its only Bluetooth connection), the attempt ends with `timeOut` and is
-retried like any other. `availability` goes `offline` after five commands in a row without an
+If the Nuki device cannot be reached within 10 seconds (another device holds its Bluetooth
+connection, or it just went out of range), the attempt ends with `timeOut` and is retried,
+but only once the device has been heard advertising again. A device that stays silent for 20
+seconds while the ESP32 listens is taken as out of range or without power: its commands are
+then answered with `timeOut` at once, and no connection is attempted until it advertises
+again. This keeps the radio free for the other Nuki devices on the same ESP32; a connection
+attempt occupies it for up to ten seconds. `availability` goes `offline` after five commands in a row without an
 answer, or when the device has not advertised for three minutes.
 
 After keypad commands the keypad is read again and `keypad/json` is published, once the
@@ -470,8 +483,21 @@ The entities of the ESPHome API (lock, binary sensors, sensors, text sensors) we
 an API client: they show the right values, and locking and unlocking through the lock entity
 switches ring to open off and on. They were not used from a Home Assistant.
 
+Failure cases tried on the rig:
+
+- **A second, unreachable device** on the same ESP32 (a pairing with an address that does not
+  exist): its commands are answered with `timeOut` in under 100 ms, `availability` is
+  `offline`, and the real Opener beside it keeps its normal speed.
+- **Broker away for a minute**: reconnected two seconds after it was back, state, settings and
+  keypad list published again, the next command answered, no restart.
+- **Reset in the middle of a batch** of keypad commands: comes back, reads the keypad, works.
+  The answers to the interrupted commands are lost; a sync puts the keypad right.
+- **Another device holding the Opener's Bluetooth connection** for 20 seconds during a burst:
+  no command lost.
+
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
-pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, the
-handling of a Nuki device out of reach, and Home Assistant itself (discovery over MQTT and
+pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, a
+real Nuki device losing power or range (only simulated with a device that never existed), a
+Wi-Fi outage, and Home Assistant itself (discovery over MQTT and
 commands through the lock entity).
