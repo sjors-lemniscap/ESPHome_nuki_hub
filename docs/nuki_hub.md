@@ -18,6 +18,7 @@ ESPHome device.
 - [Security](#security)
 - [Differences from Nuki Hub](#differences-from-nuki-hub)
 - [Test status](#test-status)
+- [Measurements](benchmarks.md)
 
 ## What it does
 
@@ -79,6 +80,7 @@ nuki_hub:
 | `log_marker_in_flash` | `false` | Keep the index of the last published log entry in flash instead of reading it back from the retained `lastRollingLog` |
 | `homeassistant_discovery` | `false` | `true` or a discovery prefix: announce the device to Home Assistant over MQTT |
 | `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
+| `fast_connection` | `true` | Ask for a short Bluetooth connection interval (7.5 to 15 ms) while connected. Commands get faster, see [measurements](benchmarks.md) |
 | `ble_disconnect_timeout` | `2s` | How long the Bluetooth connection is kept open after a command, for the next one |
 | `publish_activity_log` | `true` | Publish `log`, `shortLog`, `rollingLog` |
 | `max_keypad_entries` | `100` | Entries read from the keypad |
@@ -435,6 +437,17 @@ restarts the ESP32 after 15 minutes without an API client.
 
 ## Test status
 
-Tested on an ESP32-S3 with a **Nuki Opener** (firmware 1.12.4, hardware 4.17) and a keypad.
-The Smart Lock side shares the queue, keypad, authorization and MQTT code with the Opener
-and compiles, but **has not been run against a Smart Lock**.
+Tested on an ESP32-S3 with a **Nuki Opener** (firmware 1.12.4, hardware 4.17) and a Keypad 2:
+
+- `tests/rig/additions.js`, 41 checks of everything this component adds to Nuki Hub's
+  contract: all pass.
+- The harness of the booking system these topics were built for (keypad lifecycle, time
+  windows, queueing of simultaneous commands, activity log without gaps across a restart):
+  all pass, also with another device holding the Opener's Bluetooth connection, and over an
+  hour of bursts.
+
+Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
+MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
+pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, the
+handling of a Nuki device out of reach, and the Home Assistant entities with a Home
+Assistant connected.
