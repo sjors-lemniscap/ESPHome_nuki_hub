@@ -202,7 +202,14 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
       }
     }
     // Read the list back from the device once the commands are through
-    this->keypad_refresh_at_ = millis() + 500;
+    uint32_t delay = 500;
+    if (this->keypad_fast_list_ && this->keypad_cache_valid_ && this->keypad_commands_pending_ == 0) {
+      // Every change is known from the answers of the device: publish the list as it must be
+      // now, and read it back a little later to confirm it and to get the dates of new entries
+      this->publish_keypad_();
+      delay = 15000;
+    }
+    this->keypad_refresh_at_ = millis() + delay;
     if (this->keypad_refresh_at_ == 0) {
       this->keypad_refresh_at_ = 1;
     }

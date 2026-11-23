@@ -121,6 +121,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_keypad_control(bool enabled) { this->keypad_control_ = enabled; }
   void set_keypad_publish_code(bool enabled) { this->keypad_publish_code_ = enabled; }
   void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
+  void set_keypad_fast_list(bool enabled) { this->keypad_fast_list_ = enabled; }
   void set_keypad_delete_expired(uint32_t after_seconds, const std::string &prefix) {
     this->keypad_delete_expired_after_ = after_seconds;
     this->keypad_delete_expired_prefix_ = prefix;
@@ -320,6 +321,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_control_{true};
   bool keypad_publish_code_{true};
   bool keypad_check_code_{false};
+  bool keypad_fast_list_{false};
   uint32_t keypad_delete_expired_after_{0};
   std::string keypad_delete_expired_prefix_;
   uint32_t keypad_expiry_not_before_{0};

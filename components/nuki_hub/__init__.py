@@ -38,6 +38,7 @@ CONF_QUERY_INTERVAL_TIME_CONTROL = "query_interval_time_control"
 CONF_KEYPAD_CONTROL = "keypad_control"
 CONF_KEYPAD_PUBLISH_CODE = "keypad_publish_code"
 CONF_KEYPAD_CHECK_CODE = "keypad_check_code"
+CONF_KEYPAD_FAST_LIST = "keypad_fast_list"
 CONF_KEYPAD_DELETE_EXPIRED = "keypad_delete_expired"
 CONF_AFTER = "after"
 CONF_NAME_PREFIX = "name_prefix"
@@ -143,6 +144,7 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_KEYPAD_CONTROL, default=True): cv.boolean,
             cv.Optional(CONF_KEYPAD_PUBLISH_CODE, default=False): cv.boolean,
             cv.Optional(CONF_KEYPAD_CHECK_CODE, default=False): cv.boolean,
+            cv.Optional(CONF_KEYPAD_FAST_LIST, default=False): cv.boolean,
             cv.Optional(CONF_KEYPAD_DELETE_EXPIRED): cv.Schema(
                 {
                     cv.Optional(CONF_AFTER, default="1h"): cv.positive_time_period_seconds,
@@ -277,6 +279,7 @@ async def to_code(config):
     cg.add(var.set_keypad_control(config[CONF_KEYPAD_CONTROL]))
     cg.add(var.set_keypad_publish_code(config[CONF_KEYPAD_PUBLISH_CODE]))
     cg.add(var.set_keypad_check_code(config[CONF_KEYPAD_CHECK_CODE]))
+    cg.add(var.set_keypad_fast_list(config[CONF_KEYPAD_FAST_LIST]))
     if expired := config.get(CONF_KEYPAD_DELETE_EXPIRED):
         # At least a minute, so a code is never removed in the second it runs out
         cg.add(var.set_keypad_delete_expired(max(60, expired[CONF_AFTER].total_seconds), expired[CONF_NAME_PREFIX]))

@@ -74,6 +74,7 @@ nuki_hub:
 | `pairing` | | Take over an existing pairing, see [Pairing](#pairing) |
 | `keypad_control` | `true` | Accept keypad commands |
 | `keypad_publish_code` | `false` | Include the codes themselves in `keypad/json` |
+| `keypad_fast_list` | `false` | Publish `keypad/json` right after keypad commands from what their answers say, and read the list back from the device 15 seconds later instead of at once. New entries have no creation date until then |
 | `keypad_check_code` | `false` | Allow the keypad `check` action, which tells whether a code belongs to a code id |
 | `keypad_delete_expired` | off | `after` (default `1h`) and `name_prefix`: delete time limited entries whose end lies longer ago than `after`, optionally only those whose name starts with the prefix. Needs `time_id` and `update_time`. The end of an entry is read as local time of the `time` component, the clock `update_time` gives the Nuki device: write the dates of the entries in that time zone |
 | `invalid_code_alert` | off | `count` (default 3) and `window` (default `5min`): publish `event/invalidCodes` when that many wrong codes were entered within the window |
