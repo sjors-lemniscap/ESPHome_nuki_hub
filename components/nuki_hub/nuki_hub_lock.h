@@ -29,7 +29,7 @@ class NukiHubLock : public NukiHubComponent {
   Operation make_battery_operation() override;
   Operation make_time_control_operation() override;
   Operation make_log_operation() override;
-  bool queue_action(const std::string &action) override;
+  bool queue_action(const std::string &action, const std::string &request_id) override;
   void handle_config_action(const std::string &payload) override;
   void handle_time_control_action(const std::string &payload) override;
   bool has_keypad() const override {

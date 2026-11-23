@@ -190,7 +190,8 @@ void NukiHubOpener::publish_ring_(bool locked) {
 // Actions
 // --------------------------------------------------------------------------------------------
 
-bool NukiHubOpener::queue_action(const std::string &text) {
+bool NukiHubOpener::queue_action(const std::string &text, const std::string &request_id) {
+  const uint32_t received_at = millis();
   opener::LockAction action;
   if (!parse_lock_action(text, &action)) {
     return false;
@@ -210,7 +211,9 @@ bool NukiHubOpener::queue_action(const std::string &text) {
     }
     return result;
   };
-  op.done = [this](CmdResult result) {
+  op.done = [this, text, request_id, received_at](CmdResult result) {
+    this->publish_result_("/actionResult", request_id, text, result_to_string(result), result == CmdResult::Failed,
+                          received_at);
     if (result == CmdResult::Success) {
       opener::OpenerState pushed;
       if (this->nuki_opener_.take_pushed_opener_state(&pushed)) {
@@ -235,6 +238,7 @@ bool NukiHubOpener::queue_action(const std::string &text) {
   }
   if (this->queue_.size() >= MAX_QUEUE) {
     this->publish_("/commandResult", "busy");
+    this->publish_result_("/actionResult", request_id, text, "busy", false, received_at);
     return true;
   }
   this->queue_.insert(this->queue_.begin() + position, std::move(op));
@@ -383,6 +387,10 @@ void NukiHubOpener::handle_config_action(const std::string &payload) {
   for (JsonPairConst pair : json.as<JsonObjectConst>()) {
     const std::string key = pair.key().c_str();
     const std::string text = util::as_text(pair.value());
+    if (key == "requestId") {
+      result[key] = text;
+      continue;
+    }
     const long number = util::is_number(text) ? strtol(text.c_str(), nullptr, 10) : -1;
     if (text.empty()) {
       result[key] = "noValueSet";
@@ -670,7 +678,11 @@ void NukiHubOpener::publish_time_control_() {
 }
 
 void NukiHubOpener::handle_time_control_action(const std::string &payload) {
-  auto answer = [this](const char *text) { this->publish_("/timecontrol/commandResult", text); };
+  const std::string request_id = util::request_id(payload);
+  const uint32_t received_at = millis();
+  auto answer = [this, &request_id, received_at](const char *text) {
+    this->answer_command_("/timecontrol", request_id, "", text, false, received_at);
+  };
 
   if (!this->pin_valid_) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
@@ -763,8 +775,9 @@ void NukiHubOpener::handle_time_control_action(const std::string &payload) {
       op.step = [this, entry] { return this->nuki_opener_.update_time_control_entry(entry); };
     }
   }
-  op.done = [this](CmdResult result) {
-    this->publish_("/timecontrol/commandResult", result_to_string(result));
+  op.done = [this, request_id, action, received_at](CmdResult result) {
+    this->answer_command_("/timecontrol", request_id, action, result_to_string(result), result == CmdResult::Failed,
+                          received_at);
     this->want_time_control_ = true;
   };
   this->enqueue(std::move(op));

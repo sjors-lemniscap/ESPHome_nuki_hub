@@ -1634,6 +1634,9 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::KeypadCodeId : {
       print_buffer((uint8_t*)data, dataLen, false, "keypadCodeId", this->debug_nuki_hex_data_);
+      if (dataLen >= 2) {
+        memcpy(&this->last_keypad_code_id_, data, 2);
+      }
       break;
     }
     case Command::MostRecentCommand : {

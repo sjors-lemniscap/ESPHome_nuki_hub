@@ -46,6 +46,9 @@ struct KeypadCommand {
   bool fetched{false};
   /// Set when the command ends without a Bluetooth result (validation), published as is
   const char *verdict{nullptr};
+  /// Echoed in the JSON result, so a client can tell its own commands from those of others
+  std::string request_id;
+  uint32_t received_at{0};
 };
 
 /**
@@ -135,7 +138,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   virtual Operation make_time_control_operation() = 0;
   /// Reads the activity log from `start_index` on (0: only the newest entries)
   virtual Operation make_log_operation() = 0;
-  virtual bool queue_action(const std::string &action) = 0;
+  virtual bool queue_action(const std::string &action, const std::string &request_id) = 0;
   virtual void handle_config_action(const std::string &payload) = 0;
   virtual void handle_time_control_action(const std::string &payload) = 0;
   virtual bool has_keypad() const = 0;
@@ -165,6 +168,16 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void on_mqtt_connected_();
   void publish_maintenance_(bool initial);
   void set_available_(bool available);
+  void publish_status_();
+  /// The JSON form of a command result on `<topic>` next to Nuki Hub's plain word: with the
+  /// request id of the command, the device's error if it refused, and how long it took
+  void publish_result_(const char *topic, const std::string &request_id, const std::string &action,
+                       const char *result, bool refused_by_device, uint32_t received_at,
+                       const std::function<void(JsonObject)> &extra = nullptr);
+  /// Publishes Nuki Hub's plain result on `<base>/commandResult` and the JSON one on `<base>/result`
+  void answer_command_(const char *base, const std::string &request_id, const std::string &action,
+                       const char *result, bool refused_by_device, uint32_t received_at);
+  static const char *error_name(uint8_t code);
 
   // Keypad
   void handle_keypad_action_(const std::string &payload);
@@ -304,6 +317,8 @@ bool parse_time_of_day(const std::string &text, uint8_t *out);
 /// A JSON value as text, whether it was sent as a string or a number
 std::string as_text(JsonVariantConst value);
 bool is_number(const std::string &text);
+/// The "requestId" of a JSON command, empty if it has none
+std::string request_id(const std::string &payload);
 }  // namespace util
 
 }  // namespace esphome::nuki_hub

@@ -431,6 +431,13 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * @param pin_code the security PIN, 0 if none
      * @return true if the credentials were stored
      */
+    /// The error code of the last error report of the device (see the ErrorCode enums)
+    uint8_t get_last_error_code() const { return this->error_code_; }
+
+    /// The id the device gave the keypad code added last, 0 if it sent none
+    uint16_t get_last_keypad_code_id() const { return this->last_keypad_code_id_; }
+    void clear_last_keypad_code_id() { this->last_keypad_code_id_ = 0; }
+
     bool import_credentials(const uint8_t* ble_address, const uint8_t* secret_key, const uint8_t* authorization_id,
                             uint32_t pin_code, bool ultra = false);
 
@@ -672,6 +679,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     unsigned char sent_nonce_[crypto_secretbox_NONCEBYTES] = {};
 
     uint16_t nr_of_keypad_codes_ = 0;
+    uint16_t last_keypad_code_id_ = 0;
     uint16_t nr_of_received_keypad_codes_ = 0;
     bool keypad_code_count_received_ = false;
     uint16_t log_entry_count_ = 0;

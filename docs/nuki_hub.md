@@ -11,6 +11,7 @@ ESPHome device.
 - [Configuration](#configuration)
 - [Pairing](#pairing)
 - [Topics](#topics)
+- [Additions to Nuki Hub's topics](#additions-to-nuki-hubs-topics)
 - [Command queue and results](#command-queue-and-results)
 - [ESPHome automations](#esphome-automations)
 - [Differences from Nuki Hub](#differences-from-nuki-hub)
@@ -168,6 +169,57 @@ Below `<prefix>`:
 | `maintenance/log` | read | log lines, with `mqtt_log` |
 | `maintenance/reset` | write | `1` restarts the ESP32 |
 | `info/nukiHubVersion`, `info/nukiHubBuild`, `info/nukiHubIp` | read | this component's version, the ESPHome version, the IP address |
+
+## Additions to Nuki Hub's topics
+
+Everything above is Nuki Hub's contract. The topics below exist only here. A client that
+ignores them works as before, so the same client can talk to rooms on either firmware.
+
+**Request ids.** Every JSON command (`keypad/actionJson`, `timecontrol/action`,
+`authorization/action`, `configuration/action`) may carry a `requestId`, a string or number
+of the client's choice. A lock action can be sent as JSON too:
+`{"action":"activateRTO","requestId":"a1"}` on `action`. The id comes back in the JSON
+result, so several clients can tell their own commands apart.
+
+**JSON results**, not retained, next to the plain word Nuki Hub publishes:
+
+| Topic | For |
+| --- | --- |
+| `keypad/result` | `keypad/actionJson` |
+| `timecontrol/result` | `timecontrol/action` |
+| `authorization/result` | `authorization/action` |
+| `actionResult` | `action` |
+| `configuration/commandResult` | already JSON, now with `requestId` |
+
+```json
+{"requestId":"a1","action":"add","result":"success","durationMs":412,"codeId":105}
+{"requestId":"a2","action":"add","result":"failed","error":"K_ERROR_CODE_ALREADY_EXISTS","errorCode":42,"durationMs":377}
+```
+
+- `result` is the same word as on the plain topic.
+- `error` and `errorCode` are there when the Nuki device refused the command.
+- `durationMs` counts from the arrival of the command, time in the queue included.
+- `codeId` of an `add` is the id the device gave the new code, so it is known without
+  reading the list.
+
+**`keypad/changed`**, not retained: the one entry a successful keypad command changed.
+
+```json
+{"change":"added","codeId":105,"entry":{"codeId":105,"enabled":1,"name":"booking_4711","timeLimited":1,"allowedFrom":"2026-09-17 08:00:00","allowedUntil":"2026-09-17 10:00:00","allowedWeekdays":[],"allowedFromTime":"00:00","allowedUntilTime":"00:00"}}
+{"change":"deleted","codeId":105}
+```
+
+`keypad/json` is still published after the commands are through and stays the reference.
+
+**`status`**, retained, once a minute and when the availability changes:
+
+```json
+{"paired":true,"available":true,"pinValid":true,"rssi":-52,"lastSeenSecondsAgo":0,"queued":0,"consecutiveFailures":0}
+```
+
+**`<prefix>/maintenance/freeHeapInternal`** and **`minFreeHeapInternal`**: free internal RAM
+now and at its lowest since boot. `freeHeap` includes external RAM (PSRAM) on boards that
+have it and so cannot show internal memory running out.
 
 ## Command queue and results
 

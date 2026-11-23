@@ -16,6 +16,7 @@
 #include "esphome/components/logger/logger.h"
 #endif
 
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 
@@ -293,15 +294,29 @@ void NukiHubComponent::on_mqtt_connected_() {
         return;
       }
       ESP_LOGI(TAG, "%s action received: %s", this->kind(), payload.c_str());
+      // The plain action name of Nuki Hub, or {"action": "...", "requestId": "..."}
+      std::string action = payload;
+      std::string request_id;
+      if (payload[0] == '{') {
+        JsonDocument json;
+        if (deserializeJson(json, payload) || !json["action"].is<const char *>()) {
+          this->publish_("/action", "unknown_action");
+          return;
+        }
+        action = json["action"].as<const char *>();
+        request_id = util::as_text(json["requestId"]);
+      }
       if (!this->is_paired()) {
         this->publish_("/action", "denied");
         this->publish_("/commandResult", "notPaired");
+        this->publish_result_("/actionResult", request_id, action, "notPaired", false, millis());
         return;
       }
-      if (this->queue_action(payload)) {
+      if (this->queue_action(action, request_id)) {
         this->publish_("/action", "ack");
       } else {
         this->publish_("/action", "unknown_action");
+        this->publish_result_("/actionResult", request_id, action, "unknown_action", false, millis());
       }
     });
 
@@ -432,6 +447,12 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
   this->publish_hub_("/maintenance/uptime", buf);
   snprintf(buf, sizeof(buf), "%" PRIu32, (uint32_t) esp_get_free_heap_size());
   this->publish_hub_("/maintenance/freeHeap", buf);
+  // freeHeap includes external RAM (PSRAM) if the board has it, these two don't
+  snprintf(buf, sizeof(buf), "%u", (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  this->publish_hub_("/maintenance/freeHeapInternal", buf);
+  snprintf(buf, sizeof(buf), "%u", (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+  this->publish_hub_("/maintenance/minFreeHeapInternal", buf);
+  this->publish_status_();
 #ifdef USE_WIFI
   if (wifi::global_wifi_component != nullptr) {
     snprintf(buf, sizeof(buf), "%d", wifi::global_wifi_component->wifi_rssi());
@@ -475,8 +496,101 @@ void NukiHubComponent::set_available_(bool available) {
     if (!available) {
       this->publish_unavailable();
     }
+    this->publish_status_();
     this->state_callback_.call();
   }
+}
+
+// Everything about the link to the Nuki device in one message
+void NukiHubComponent::publish_status_() {
+  JsonDocument json;
+  const bool paired = this->is_paired();
+  json["paired"] = paired;
+  json["available"] = this->available_;
+  json["pinValid"] = this->pin_valid_;
+  if (paired) {
+    const int64_t last = this->ble()->get_last_received_beacon_ts();
+    json["rssi"] = this->ble()->get_rssi();
+    if (last > 0) {
+      json["lastSeenSecondsAgo"] = (uint32_t) ((esp_timer_get_time() / 1000 - last) / 1000);
+    }
+  }
+  json["queued"] = this->queue_.size() + (this->op_active_ ? 1 : 0);
+  json["consecutiveFailures"] = this->consecutive_failures_;
+  this->publish_json_("/status", json);
+}
+
+const char *NukiHubComponent::error_name(uint8_t code) {
+  switch (code) {
+    case 0xFD: return "ERROR_BAD_CRC";
+    case 0xFE: return "ERROR_BAD_LENGTH";
+    case 0xFF: return "ERROR_UNKNOWN";
+    case 0x10: return "P_ERROR_NOT_PAIRING";
+    case 0x11: return "P_ERROR_BAD_AUTHENTICATOR";
+    case 0x12: return "P_ERROR_BAD_PARAMETER";
+    case 0x13: return "P_ERROR_MAX_USER";
+    case 0x20: return "K_ERROR_NOT_AUTHORIZED";
+    case 0x21: return "K_ERROR_BAD_PIN";
+    case 0x22: return "K_ERROR_BAD_NONCE";
+    case 0x23: return "K_ERROR_BAD_PARAMETER";
+    case 0x24: return "K_ERROR_INVALID_AUTH_ID";
+    case 0x25: return "K_ERROR_DISABLED";
+    case 0x26: return "K_ERROR_REMOTE_NOT_ALLOWED";
+    case 0x27: return "K_ERROR_TIME_NOT_ALLOWED";
+    case 0x28: return "K_ERROR_TOO_MANY_PIN_ATTEMPTS";
+    case 0x29: return "K_ERROR_TOO_MANY_ENTRIES";
+    case 0x2A: return "K_ERROR_CODE_ALREADY_EXISTS";
+    case 0x2B: return "K_ERROR_CODE_INVALID";
+    case 0x2C: return "K_ERROR_CODE_INVALID_TIMEOUT_1";
+    case 0x2D: return "K_ERROR_CODE_INVALID_TIMEOUT_2";
+    case 0x2E: return "K_ERROR_CODE_INVALID_TIMEOUT_3";
+    case 0x40: return "K_ERROR_AUTO_UNLOCK_TOO_RECENT";
+    case 0x41: return "K_ERROR_POSITION_UNKNOWN";
+    case 0x42: return "K_ERROR_MOTOR_BLOCKED";
+    case 0x43: return "K_ERROR_CLUTCH_FAILURE";
+    case 0x44: return "K_ERROR_MOTOR_TIMEOUT";
+    case 0x45: return "K_ERROR_BUSY";
+    case 0x46: return "K_ERROR_CANCELED";
+    case 0x47: return "K_ERROR_NOT_CALIBRATED";
+    case 0x48: return "K_ERROR_MOTOR_POSITION_LIMIT";
+    case 0x49: return "K_ERROR_MOTOR_LOW_VOLTAGE";
+    case 0x4A: return "K_ERROR_MOTOR_POWER_FAILURE";
+    case 0x4B: return "K_ERROR_CLUTCH_POWER_FAILURE";
+    case 0x4C: return "K_ERROR_VOLTAGE_TOO_LOW";
+    case 0x4D: return "K_ERROR_FIRMWARE_UPDATE_NEEDED";
+    default: return "unknown";
+  }
+}
+
+void NukiHubComponent::publish_result_(const char *topic, const std::string &request_id, const std::string &action,
+                                       const char *result, bool refused_by_device, uint32_t received_at,
+                                       const std::function<void(JsonObject)> &extra) {
+  JsonDocument doc;
+  JsonObject json = doc.to<JsonObject>();
+  if (!request_id.empty()) {
+    json["requestId"] = request_id;
+  }
+  if (!action.empty()) {
+    json["action"] = action;
+  }
+  json["result"] = result;
+  if (refused_by_device) {
+    const uint8_t code = this->ble()->get_last_error_code();
+    json["error"] = error_name(code);
+    json["errorCode"] = code;
+  }
+  json["durationMs"] = millis() - received_at;
+  if (extra) {
+    extra(json);
+  }
+  this->publish_json_(topic, doc, false);
+}
+
+void NukiHubComponent::answer_command_(const char *base, const std::string &request_id, const std::string &action,
+                                       const char *result, bool refused_by_device, uint32_t received_at) {
+  std::string topic = base;
+  this->publish_((topic + "/commandResult").c_str(), result);
+  this->publish_result_((topic + "/result").c_str(), request_id, action, result, refused_by_device, received_at);
 }
 
 // --------------------------------------------------------------------------------------------
@@ -759,7 +873,7 @@ bool NukiHubComponent::request_action(const std::string &action) {
   if (!this->is_paired()) {
     return false;
   }
-  return this->queue_action(action);
+  return this->queue_action(action, "");
 }
 
 // --------------------------------------------------------------------------------------------
@@ -886,12 +1000,16 @@ void NukiHubComponent::publish_keypad_() {
 }
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
+  const std::string request_id = util::request_id(payload);
   if (!this->is_paired()) {
     this->publish_("/keypad/commandResultJson", "notPaired");
+    this->publish_result_("/keypad/result", request_id, "", "notPaired", false, millis());
     return;
   }
   auto cmd = std::make_shared<KeypadCommand>();
   cmd->payload = payload;
+  cmd->request_id = request_id;
+  cmd->received_at = millis();
 
   Operation op;
   op.name = "keypad command";
@@ -900,6 +1018,7 @@ void NukiHubComponent::handle_keypad_action_(const std::string &payload) {
 
   if (this->queue_.size() >= MAX_QUEUE) {
     this->publish_("/keypad/commandResultJson", "busy");
+    this->publish_result_("/keypad/result", request_id, "", "busy", false, cmd->received_at);
     return;
   }
   this->keypad_commands_pending_++;
@@ -922,8 +1041,37 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
                                                    [&cmd](const KeypadEntry &e) { return e.codeId == cmd.code_id; }),
                                     this->keypad_entries_.end());
       } else if (cmd.action == "add") {
-        // The new code id is only known after the next read
-        this->keypad_cache_valid_ = false;
+        // The device answers an add with the id it gave the code. Without it the id is
+        // only known after the next read.
+        cmd.code_id = this->ble()->get_last_keypad_code_id();
+        if (cmd.code_id != 0 && this->find_keypad_entry_(cmd.code_id) == nullptr) {
+          KeypadEntry e{};
+          e.codeId = cmd.code_id;
+          e.code = cmd.add.code;
+          memcpy(e.name, cmd.add.name, sizeof(e.name));
+          e.enabled = 1;
+          e.timeLimited = cmd.add.timeLimited;
+          e.allowedFromYear = cmd.add.allowedFromYear;
+          e.allowedFromMonth = cmd.add.allowedFromMonth;
+          e.allowedFromDay = cmd.add.allowedFromDay;
+          e.allowedFromHour = cmd.add.allowedFromHour;
+          e.allowedFromMin = cmd.add.allowedFromMin;
+          e.allowedFromSec = cmd.add.allowedFromSec;
+          e.allowedUntilYear = cmd.add.allowedUntilYear;
+          e.allowedUntilMonth = cmd.add.allowedUntilMonth;
+          e.allowedUntilDay = cmd.add.allowedUntilDay;
+          e.allowedUntilHour = cmd.add.allowedUntilHour;
+          e.allowedUntilMin = cmd.add.allowedUntilMin;
+          e.allowedUntilSec = cmd.add.allowedUntilSec;
+          e.allowedWeekdays = cmd.add.allowedWeekdays;
+          e.allowedFromTimeHour = cmd.add.allowedFromTimeHour;
+          e.allowedFromTimeMin = cmd.add.allowedFromTimeMin;
+          e.allowedUntilTimeHour = cmd.add.allowedUntilTimeHour;
+          e.allowedUntilTimeMin = cmd.add.allowedUntilTimeMin;
+          this->keypad_entries_.push_back(e);
+        } else {
+          this->keypad_cache_valid_ = false;
+        }
       } else {
         for (auto &e : this->keypad_entries_) {
           if (e.codeId != cmd.update.codeId) {
@@ -960,6 +1108,33 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
     }
   }
   this->publish_("/keypad/commandResultJson", text);
+
+  const bool executed = cmd.verdict == nullptr;
+  const uint16_t code_id = cmd.code_id;
+  this->publish_result_("/keypad/result", cmd.request_id, cmd.action, text, executed && result == CmdResult::Failed,
+                        cmd.received_at, [code_id](JsonObject json) {
+                          if (code_id != 0) {
+                            json["codeId"] = code_id;
+                          }
+                        });
+  if (executed && result == CmdResult::Success && code_id != 0) {
+    // The one entry that changed, for clients that keep a copy of the list
+    JsonDocument doc;
+    JsonObject json = doc.to<JsonObject>();
+    json["change"] = cmd.action == "add" ? "added" : (cmd.action == "delete" ? "deleted" : "updated");
+    json["codeId"] = code_id;
+    const KeypadEntry *entry = this->find_keypad_entry_(code_id);
+    if (entry != nullptr && cmd.action != "delete") {
+      keypad_entry_to_json(*entry, json["entry"].to<JsonObject>(), this->keypad_publish_code_);
+      if (cmd.action == "add") {
+        // Not known before the next read of the list
+        json["entry"].remove("dateCreated");
+        json["entry"].remove("dateLastActive");
+        json["entry"].remove("lockCount");
+      }
+    }
+    this->publish_json_("/keypad/changed", doc, false);
+  }
 }
 
 // Fills the date and time fields `prefix`Year..Sec of a packed entry from six values
@@ -1186,6 +1361,11 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
   }
 
   if (cmd.action == "add") {
+    if (!cmd.fetched) {
+      // First step of the add itself: the id the device answers with belongs to this command
+      cmd.fetched = true;
+      this->ble()->clear_last_keypad_code_id();
+    }
     return this->ble()->add_keypad_entry(cmd.add);
   }
   if (cmd.action == "update") {
@@ -1262,7 +1442,11 @@ void NukiHubComponent::publish_auth_() {
 }
 
 void NukiHubComponent::handle_auth_action_(const std::string &payload) {
-  auto answer = [this](const char *text) { this->publish_("/authorization/commandResult", text); };
+  const std::string request_id = util::request_id(payload);
+  const uint32_t received_at = millis();
+  auto answer = [this, &request_id, received_at](const char *text) {
+    this->answer_command_("/authorization", request_id, "", text, false, received_at);
+  };
 
   if (!this->pin_valid_) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
@@ -1397,8 +1581,9 @@ void NukiHubComponent::handle_auth_action_(const std::string &payload) {
     op.name = "update authorization";
     op.step = [this, e] { return this->ble()->update_authorization_entry(e); };
   }
-  op.done = [this](CmdResult result) {
-    this->publish_("/authorization/commandResult", result_to_string(result));
+  op.done = [this, request_id, action, received_at](CmdResult result) {
+    this->answer_command_("/authorization", request_id, action, result_to_string(result), result == CmdResult::Failed,
+                          received_at);
     this->want_auth_ = true;
   };
   this->enqueue(std::move(op));
@@ -1522,6 +1707,17 @@ std::string as_text(JsonVariantConst value) {
   std::string out;
   serializeJson(value, out);
   return out;
+}
+
+std::string request_id(const std::string &payload) {
+  if (payload.find("requestId") == std::string::npos) {
+    return "";
+  }
+  JsonDocument json;
+  if (deserializeJson(json, payload)) {
+    return "";
+  }
+  return as_text(json["requestId"]);
 }
 
 bool is_number(const std::string &text) {
