@@ -126,6 +126,7 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
     this->keypad_commands_pending_--;
   }
   const char *text = cmd.verdict != nullptr ? cmd.verdict : result_to_string(result);
+  bool publish_list = false;
   if (cmd.verdict != nullptr) {
     ESP_LOGI(TAG, "Keypad command not executed: %s", cmd.verdict);
   }
@@ -211,8 +212,9 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
     if (this->keypad_fast_list_ && this->keypad_cache_valid_ && this->keypad_commands_pending_ == 0 &&
         result == CmdResult::Success) {
       // Every change is known from the answers of the device: publish the list as it must be
-      // now, and read it back a little later to confirm it and to get the dates of new entries
-      this->publish_keypad_();
+      // now (after the answer to this command, below), and read it back a little later to
+      // confirm it and to get the dates of new entries
+      publish_list = true;
       delay = 15000;
     }
     this->keypad_refresh_at_ = millis() + delay;
@@ -275,6 +277,9 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
       }
     }
     this->publish_json_("/keypad/changed", doc, false);
+  }
+  if (publish_list) {
+    this->publish_keypad_();
   }
 }
 
