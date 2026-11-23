@@ -122,6 +122,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_keypad_publish_code(bool enabled) { this->keypad_publish_code_ = enabled; }
   void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
   void set_keypad_fast_list(bool enabled) { this->keypad_fast_list_ = enabled; }
+  void set_keypad_topic_per_entry(bool enabled) { this->keypad_topic_per_entry_ = enabled; }
   void set_keypad_delete_expired(uint32_t after_seconds, const std::string &prefix) {
     this->keypad_delete_expired_after_ = after_seconds;
     this->keypad_delete_expired_prefix_ = prefix;
@@ -277,6 +278,8 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void keypad_command_done_(KeypadCommand &cmd, CmdResult result);
   Operation make_keypad_operation_();
   void publish_keypad_();
+  void publish_keypad_entries_();
+  void publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove);
   const nuki_lock::KeypadEntry *find_keypad_entry_(uint16_t code_id) const;
 
   // Authorizations
@@ -323,6 +326,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_publish_code_{true};
   bool keypad_check_code_{false};
   bool keypad_fast_list_{false};
+  bool keypad_topic_per_entry_{false};
+  std::vector<uint16_t> keypad_published_ids_;
+  uint32_t discovery_nuki_id_{0};
   uint32_t keypad_delete_expired_after_{0};
   std::string keypad_delete_expired_prefix_;
   uint32_t keypad_expiry_not_before_{0};

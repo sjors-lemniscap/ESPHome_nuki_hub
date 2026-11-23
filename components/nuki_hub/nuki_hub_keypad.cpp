@@ -85,6 +85,33 @@ void NukiHubComponent::publish_keypad_() {
   this->publish_json_("/keypad/json", doc);
   this->publish_int_("/keypad/count", this->keypad_entries_.size());
   this->update_entities_();
+  if (this->keypad_topic_per_entry_) {
+    this->publish_keypad_entries_();
+  }
+}
+
+// One retained topic per entry, keypad/codes/<code id>, and with Home Assistant discovery a
+// switch that enables and disables the entry. Topics of entries that are gone are cleared.
+void NukiHubComponent::publish_keypad_entries_() {
+  std::vector<uint16_t> current;
+  char topic[40];
+  for (const auto &entry : this->keypad_entries_) {
+    current.push_back(entry.codeId);
+    JsonDocument doc;
+    JsonObject json = doc.to<JsonObject>();
+    keypad_entry_to_json(entry, json, this->keypad_publish_code_);
+    snprintf(topic, sizeof(topic), "/keypad/codes/%u", entry.codeId);
+    this->publish_json_(topic, doc);
+    this->publish_keypad_entry_discovery_(entry.codeId, util::fixed_string(entry.name, sizeof(entry.name)), false);
+  }
+  for (uint16_t code_id : this->keypad_published_ids_) {
+    if (std::find(current.begin(), current.end(), code_id) == current.end()) {
+      snprintf(topic, sizeof(topic), "/keypad/codes/%u", code_id);
+      this->publish_(topic, "");
+      this->publish_keypad_entry_discovery_(code_id, "", true);
+    }
+  }
+  this->keypad_published_ids_ = std::move(current);
 }
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {

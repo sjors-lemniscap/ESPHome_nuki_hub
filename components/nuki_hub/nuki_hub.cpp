@@ -464,6 +464,23 @@ void NukiHubComponent::on_mqtt_connected_() {
           handler.hub ? this->hub_topic_(handler.suffix.c_str()) : this->topic_(handler.suffix.c_str()),
           [callback](const std::string &topic, const std::string &payload) { (*callback)(payload); }, 1);
     }
+    if (this->keypad_topic_per_entry_) {
+      // Entry topics retained from before a restart: those of entries deleted since must go too
+      mqtt::global_mqtt_client->subscribe(
+          this->topic_("/keypad/codes/+"),
+          [this](const std::string &topic, const std::string &payload) {
+            const std::string id = topic.substr(topic.rfind('/') + 1);
+            if (payload.empty() || !util::is_number(id) || id.size() > 5) {
+              return;
+            }
+            const uint16_t code_id = strtoul(id.c_str(), nullptr, 10);
+            if (std::find(this->keypad_published_ids_.begin(), this->keypad_published_ids_.end(), code_id) ==
+                this->keypad_published_ids_.end()) {
+              this->keypad_published_ids_.push_back(code_id);
+            }
+          },
+          1);
+    }
   }
 
   this->log_marker_deadline_ = millis() + 3000;
@@ -1178,7 +1195,45 @@ void NukiHubComponent::set_ring_entity_(bool ringing) {
 #endif
 }
 
+void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove) {
+#ifdef USE_MQTT
+  if (this->discovery_prefix_.empty() || this->discovery_nuki_id_ == 0 || mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected()) {
+    return;
+  }
+  char uid[24];
+  snprintf(uid, sizeof(uid), "nuki_%08" PRIx32, this->discovery_nuki_id_);
+  char object[24];
+  snprintf(object, sizeof(object), "keypad_%u", code_id);
+  const std::string topic = this->discovery_prefix_ + "/switch/" + uid + "_" + object + "/config";
+  if (remove) {
+    mqtt::global_mqtt_client->publish(topic, "", 0, 1, true);
+    return;
+  }
+  const std::string base = this->topic_prefix_ + "/" + this->kind();
+  JsonDocument doc;
+  JsonObject json = doc.to<JsonObject>();
+  json["unique_id"] = std::string(uid) + "_" + object;
+  json["name"] = "Keypad - " + name + " - " + to_string(code_id);
+  json["entity_category"] = "diagnostic";
+  json["availability_topic"] = base + "/availability";
+  json["state_topic"] = base + "/keypad/codes/" + to_string(code_id);
+  json["json_attributes_topic"] = base + "/keypad/codes/" + to_string(code_id);
+  json["value_template"] = "{{ value_json.enabled }}";
+  json["state_on"] = "1";
+  json["state_off"] = "0";
+  json["command_topic"] = base + "/keypad/actionJson";
+  json["payload_on"] = "{\"action\":\"update\",\"codeId\":" + to_string(code_id) + ",\"enabled\":1}";
+  json["payload_off"] = "{\"action\":\"update\",\"codeId\":" + to_string(code_id) + ",\"enabled\":0}";
+  json["device"]["identifiers"].to<JsonArray>().add(uid);
+  std::string out;
+  serializeJson(doc, out);
+  mqtt::global_mqtt_client->publish(topic, out.c_str(), out.size(), 1, true);
+#endif
+}
+
 void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &name, const std::string &firmware) {
+  this->discovery_nuki_id_ = nuki_id;
 #ifdef USE_MQTT
   if (this->discovery_prefix_.empty() || this->discovery_published_ || mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected()) {
