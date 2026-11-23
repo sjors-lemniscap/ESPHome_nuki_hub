@@ -144,6 +144,8 @@ void NukiHubComponent::setup() {
   this->register_handlers_();
   this->setup_device();
   this->add_on_state_callback([this] { this->update_entities_(); });
+  // Known from the start: nobody is ringing
+  this->set_ring_entity_(false);
 
   if (ble->is_paired_with_lock()) {
     ESP_LOGI(TAG, "Paired with the Nuki %s", this->kind());

@@ -465,8 +465,12 @@ Tested on an ESP32-S3 with a **Nuki Opener** (firmware 1.12.4, hardware 4.17) an
   all pass, also with another device holding the Opener's Bluetooth connection, and over an
   hour of bursts.
 
+The entities of the ESPHome API (lock, binary sensors, sensors, text sensors) were read
+from the device with an API client and show the right values; they were not used from a
+Home Assistant.
+
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
 pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, the
-handling of a Nuki device out of reach, and the Home Assistant entities with a Home
-Assistant connected.
+handling of a Nuki device out of reach, and Home Assistant itself (discovery over MQTT and
+commands through the lock entity).
