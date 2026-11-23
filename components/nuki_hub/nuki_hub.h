@@ -253,6 +253,8 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void subscribe_hub_(const char *suffix, std::function<void(const std::string &)> &&callback);
 
   void register_handlers_();
+  bool send_(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos = 1);
+  void flush_outbox_();
   void on_mqtt_connected_();
   void publish_maintenance_(bool initial);
   void set_available_(bool available);
@@ -332,6 +334,8 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_fast_list_{false};
   bool keypad_topic_per_entry_{false};
   std::vector<uint16_t> keypad_published_ids_;
+  bool keypad_entries_published_{false};
+  bool discovery_scan_active_{false};
   uint32_t discovery_nuki_id_{0};
   uint32_t keypad_delete_expired_after_{0};
   std::string keypad_delete_expired_prefix_;
@@ -475,6 +479,14 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
     std::function<void(const std::string &)> callback;
   };
   std::vector<Handler> handlers_;
+  struct Outgoing {
+    std::string topic;
+    std::string payload;
+    bool retain;
+  };
+  std::deque<Outgoing> outbox_;
+  uint32_t outbox_dropped_{0};
+  static const size_t MAX_OUTBOX = 400;
 };
 
 // Helpers shared by the device classes

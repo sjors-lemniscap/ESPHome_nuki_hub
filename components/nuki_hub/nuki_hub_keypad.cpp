@@ -112,6 +112,7 @@ void NukiHubComponent::publish_keypad_entries_() {
     }
   }
   this->keypad_published_ids_ = std::move(current);
+  this->keypad_entries_published_ = true;
 }
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {

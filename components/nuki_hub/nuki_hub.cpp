@@ -220,18 +220,55 @@ std::string NukiHubComponent::topic_(const char *suffix) const {
 
 std::string NukiHubComponent::hub_topic_(const char *suffix) const { return this->topic_prefix_ + suffix; }
 
+// Everything goes out through here. The MQTT client may refuse a message for the moment (with
+// idf_send_async its queue holds 29): such a message waits in outbox_ and is sent from loop(),
+// and so does everything after it, to keep the order. Log lines (qos 0) are not kept.
+bool NukiHubComponent::send_(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos) {
 #ifdef USE_MQTT
-static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos = 1) {
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
     return false;
   }
-  return mqtt::global_mqtt_client->publish(topic, payload, length, qos, retain);
-}
+  if (this->outbox_.empty() && mqtt::global_mqtt_client->publish(topic.c_str(), payload, length, qos, retain)) {
+    return true;
+  }
+  if (qos == 0) {
+    return false;
+  }
+  if (this->outbox_.size() >= MAX_OUTBOX) {
+    this->outbox_dropped_++;
+    return false;
+  }
+  this->outbox_.push_back({topic, std::string(payload, length), retain});
+  return true;
 #else
-static bool mqtt_publish(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos = 1) {
   return false;
-}
 #endif
+}
+
+void NukiHubComponent::flush_outbox_() {
+#ifdef USE_MQTT
+  if (this->outbox_.empty()) {
+    return;
+  }
+  if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
+    // Published again from what is read after the reconnect
+    this->outbox_.clear();
+    return;
+  }
+  for (int i = 0; i < 8 && !this->outbox_.empty(); i++) {
+    const auto &message = this->outbox_.front();
+    if (!mqtt::global_mqtt_client->publish(message.topic.c_str(), message.payload.c_str(), message.payload.size(), 1,
+                                           message.retain)) {
+      break;
+    }
+    this->outbox_.pop_front();
+  }
+  if (this->outbox_.empty() && this->outbox_dropped_ > 0) {
+    ESP_LOGW(TAG, "%" PRIu32 " MQTT messages could not be kept for sending", this->outbox_dropped_);
+    this->outbox_dropped_ = 0;
+  }
+#endif
+}
 
 // Nuki Hub's "MQTT logging": every log line as one message, without the colour codes of the
 // serial log
@@ -255,19 +292,19 @@ void NukiHubComponent::on_log_(uint8_t level, const char *message, size_t length
     line[n++] = message[i];
   }
   if (n > 0) {
-    mqtt_publish(this->log_topic_, line, n, false, 0);
+    this->send_(this->log_topic_, line, n, false, 0);
   }
   this->in_log_ = false;
 }
 
 bool NukiHubComponent::publish_(const char *suffix, const std::string &payload, bool retain) {
   this->message_callback_.call(suffix, payload);
-  return mqtt_publish(this->topic_(suffix), payload.c_str(), payload.size(), retain);
+  return this->send_(this->topic_(suffix), payload.c_str(), payload.size(), retain);
 }
 
 bool NukiHubComponent::publish_(const char *suffix, const char *payload, bool retain) {
   this->message_callback_.call(suffix, payload);
-  return mqtt_publish(this->topic_(suffix), payload, strlen(payload), retain);
+  return this->send_(this->topic_(suffix), payload, strlen(payload), retain);
 }
 
 bool NukiHubComponent::publish_int_(const char *suffix, int64_t value, bool retain) {
@@ -283,7 +320,7 @@ bool NukiHubComponent::publish_json_(const char *suffix, JsonDocument &doc, bool
 }
 
 bool NukiHubComponent::publish_hub_(const char *suffix, const std::string &payload, bool retain) {
-  return mqtt_publish(this->hub_topic_(suffix), payload.c_str(), payload.size(), retain);
+  return this->send_(this->hub_topic_(suffix), payload.c_str(), payload.size(), retain);
 }
 
 void NukiHubComponent::subscribe_(const char *suffix, std::function<void(const std::string &)> &&callback) {
@@ -927,6 +964,7 @@ void NukiHubComponent::loop() {
     this->publish_maintenance_(false);
   }
 #endif
+  this->flush_outbox_();
   if (now - this->last_beacon_check_ >= 10000) {
     this->last_beacon_check_ = now;
     this->check_beacon_age_();
@@ -1291,7 +1329,7 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
   snprintf(object, sizeof(object), "keypad_%u", code_id);
   const std::string topic = this->discovery_prefix_ + "/switch/" + uid + "_" + object + "/config";
   if (remove) {
-    mqtt::global_mqtt_client->publish(topic, "", 0, 1, true);
+    this->send_(topic, "", 0, true);
     return;
   }
   const std::string base = this->topic_prefix_ + "/" + this->kind();
@@ -1312,7 +1350,7 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
   json["device"]["identifiers"].to<JsonArray>().add(uid);
   std::string out;
   serializeJson(doc, out);
-  mqtt::global_mqtt_client->publish(topic, out.c_str(), out.size(), 1, true);
+  this->send_(topic, out.c_str(), out.size(), true);
 #endif
 }
 
@@ -1322,6 +1360,44 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
   if (this->discovery_prefix_.empty() || this->discovery_published_ || mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected()) {
     return;
+  }
+  if (this->keypad_topic_per_entry_ && !this->discovery_scan_active_) {
+    // Switches retained for entries that are gone, from before a restart or a lost connection
+    this->discovery_scan_active_ = true;
+    char prefix[32];
+    snprintf(prefix, sizeof(prefix), "nuki_%08" PRIx32 "_keypad_", nuki_id);
+    const std::string own = prefix;
+    const std::string scan_topic = this->discovery_prefix_ + "/switch/+/config";
+    mqtt::global_mqtt_client->subscribe(
+        scan_topic,
+        [this, own](const std::string &topic, const std::string &payload) {
+          const size_t end = topic.rfind('/');
+          const size_t start = end == std::string::npos ? std::string::npos : topic.rfind('/', end - 1);
+          if (payload.empty() || start == std::string::npos || topic.compare(start + 1, own.size(), own) != 0) {
+            return;
+          }
+          const std::string id = topic.substr(start + 1 + own.size(), end - start - 1 - own.size());
+          if (!util::is_number(id) || id.size() > 5) {
+            return;
+          }
+          const uint16_t code_id = strtoul(id.c_str(), nullptr, 10);
+          if (std::find(this->keypad_published_ids_.begin(), this->keypad_published_ids_.end(), code_id) !=
+              this->keypad_published_ids_.end()) {
+            return;
+          }
+          if (this->keypad_entries_published_) {
+            this->publish_keypad_entry_discovery_(code_id, "", true);
+          } else {
+            this->keypad_published_ids_.push_back(code_id);
+          }
+        },
+        1);
+    this->set_timeout("discovery_scan", 15000, [this, scan_topic] {
+      this->discovery_scan_active_ = false;
+      if (mqtt::global_mqtt_client != nullptr) {
+        mqtt::global_mqtt_client->unsubscribe(scan_topic);
+      }
+    });
   }
   this->discovery_published_ = true;
   char uid[24];
@@ -1344,7 +1420,7 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
     std::string out;
     serializeJson(doc, out);
     const std::string topic = this->discovery_prefix_ + "/" + component + "/" + uid + "/" + object + "/config";
-    mqtt::global_mqtt_client->publish(topic, out.c_str(), out.size(), 1, true);
+    this->send_(topic, out.c_str(), out.size(), true);
   };
 
   announce("lock", "lock", [&](JsonObject json) {
