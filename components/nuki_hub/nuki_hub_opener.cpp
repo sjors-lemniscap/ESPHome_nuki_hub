@@ -600,9 +600,13 @@ void NukiHubOpener::handle_config_action(const std::string &payload) {
         }
       });
     };
-    op.done = [basic, pending, changed, finish](CmdResult r) {
+    op.done = [this, basic, pending, changed, finish](CmdResult r) {
       for (const auto &change : *basic) {
         (*pending)[change.key] = result_to_string(r);
+        if (r == CmdResult::Success) {
+          // What the next command is compared with, until the config is read again
+          change.apply(this->config_);
+        }
       }
       *changed = *changed || r == CmdResult::Success;
       finish();
@@ -619,9 +623,12 @@ void NukiHubOpener::handle_config_action(const std::string &payload) {
         }
       });
     };
-    op.done = [advanced, pending, changed, finish](CmdResult r) {
+    op.done = [this, advanced, pending, changed, finish](CmdResult r) {
       for (const auto &change : *advanced) {
         (*pending)[change.key] = result_to_string(r);
+        if (r == CmdResult::Success) {
+          change.apply(this->advanced_config_);
+        }
       }
       *changed = *changed || r == CmdResult::Success;
       finish();
