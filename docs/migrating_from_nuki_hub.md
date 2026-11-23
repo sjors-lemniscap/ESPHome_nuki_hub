@@ -87,3 +87,10 @@ puts Nuki Hub back exactly as it was, settings and pairing included. The Nuki de
 not notice the difference: both firmwares use the same authorization.
 
 Do not run both at the same time on two ESP32s with the same pairing.
+
+## Home Assistant entities of Nuki Hub
+
+If Nuki Hub announced itself to Home Assistant, its discovery topics are still on the broker
+after the move and its entities stay next to the new ones. Publish `1` to
+`<prefix>/maintenance/removeNukiHubDiscovery` to clear those of the Nuki device, see
+[Home Assistant](nuki_hub.md#coming-from-nuki-hub).

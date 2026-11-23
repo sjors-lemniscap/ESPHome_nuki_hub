@@ -83,6 +83,7 @@ nuki_hub:
 | `invalid_code_alert` | off | `count` (default 3) and `window` (default `5min`): publish `event/invalidCodes` when that many wrong codes were entered within the window |
 | `log_marker_in_flash` | `false` | Keep the index of the last published log entry in flash instead of reading it back from the retained `lastRollingLog` |
 | `homeassistant_discovery` | `false` | `true` or a discovery prefix: announce the device to Home Assistant over MQTT |
+| `api_transport` | `false` | The topics over the ESPHome API as well: an action for commands and an event for everything published, see [Without a broker](#without-a-broker) |
 | `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
 | `fast_connection` | `true` | Ask for a short Bluetooth connection interval (7.5 to 15 ms) while connected. Commands get faster, see [measurements](benchmarks.md) |
 | `ble_disconnect_timeout` | `2s` | How long the Bluetooth connection is kept open after a command, for the next one |
@@ -193,6 +194,7 @@ Below `<prefix>`:
 | `maintenance/mqttConnectionState` | read | `online` / `offline` (set in `mqtt:`) |
 | `maintenance/log` | read | log lines, with `mqtt_log` |
 | `maintenance/reset` | write | `1` restarts the ESP32 |
+| `maintenance/removeNukiHubDiscovery` | write | `1` clears the Home Assistant discovery topics Nuki Hub left on the broker for this Nuki device, answered with their number after ten seconds |
 | `info/nukiHubVersion`, `info/nukiHubBuild`, `info/nukiHubIp` | read | this component's version, the ESPHome version, the IP address |
 
 ## Additions to Nuki Hub's topics
@@ -442,6 +444,51 @@ the event `esphome.nuki_hub` brings `{"requestId":"1","result":"success","codeId
 If Home Assistant is not always connected, set `api: reboot_timeout: 0s`: ESPHome otherwise
 restarts the ESP32 after 15 minutes without an API client.
 
+### Availability
+
+Entities announced over MQTT are available when the Nuki device answers (`availability`) and
+the ESP32 is connected to the broker. The second is the last will of the `mqtt:` component:
+give `birth_message` and `will_message` the same topic, as in the example, or leave both at
+ESPHome's default.
+
+### Coming from Nuki Hub
+
+Nuki Hub's own discovery topics stay on the broker when the ESP32 is flashed, and with them
+its entities in Home Assistant, next to the new ones. Publish `1` to
+`<prefix>/maintenance/removeNukiHubDiscovery` once to clear those of the Nuki device. The
+topics of the Nuki Hub device itself (restart, Wi-Fi signal, firmware) are below
+`homeassistant/+/<hub id>/` and have to be cleared by hand or with the device removed in
+Home Assistant.
+
+## Without a broker
+
+With `api_transport: true` the same topics are there over the ESPHome API, for a client
+that connects to each ESP32 itself:
+
+```yaml
+api:
+  encryption:
+    key: !secret api_key
+  custom_services: true
+  homeassistant_services: true
+
+nuki_hub:
+  - type: opener
+    topic_prefix: room_u1
+    api_transport: true
+```
+
+- **Commands**: the action `nuki_hub_command(device, topic, payload)`. `device` is what the
+  topics start with on MQTT, `room_u1/opener`, and `topic` the rest with its slash,
+  `/keypad/actionJson`.
+- **Everything published**: the event `esphome.nuki_hub` with `device`, `topic` and
+  `payload`.
+
+Nothing is retained: a client asks for what it needs after connecting (`/query/keypad`,
+`/query/lockstate`, `/query/config`). `mqtt:` can be left out or kept next to it. In Home
+Assistant the events can be used in automations as they are. Measured on the rig, a keypad
+command takes as long as over MQTT (about 210 ms), see [benchmarks](benchmarks.md).
+
 ## Security
 
 - **Broker access.** Whoever may publish to `<prefix>/opener/action` can open the door, and
@@ -495,9 +542,16 @@ Failure cases tried on the rig:
 - **Another device holding the Opener's Bluetooth connection** for 20 seconds during a burst:
   no command lost.
 
+- **Wi-Fi away for a minute**: the last will sets the ESP32 offline at the broker, four
+  seconds after Wi-Fi is back everything is published again, no restart, commands work.
+- **Home Assistant 2026.10 with its MQTT integration** on the same broker: all announced
+  entities appear with their states, go unavailable while the ESP32 is off Wi-Fi, and
+  switches of deleted keypad entries do not stay behind.
+- **The ESPHome API transport**: 27 keypad commands from a Python client and the booking
+  system's agent (Node) adding, updating and deleting a code, without a broker.
+
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
 pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, a
-real Nuki device losing power or range (only simulated with a device that never existed), a
-Wi-Fi outage, and Home Assistant itself (discovery over MQTT and
-commands through the lock entity).
+real Nuki device losing power or range (only simulated with a device that never existed),
+and commands from Home Assistant's own interface.

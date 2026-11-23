@@ -72,6 +72,7 @@ CONF_DEBUG_COMMAND = "command"
 CONF_ACTION = "action"
 CONF_PAIRING_MODE = "pairing_mode"
 CONF_ON_MESSAGE = "on_message"
+CONF_API_TRANSPORT = "api_transport"
 
 TYPE_OPENER = "opener"
 TYPE_LOCK = "lock"
@@ -169,6 +170,8 @@ _BASE_SCHEMA = (
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(NukiHubMessageTrigger)}
             ),
             cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
+            # The topics as an action and an event of the ESPHome API, see docs/nuki_hub.md
+            cv.Optional(CONF_API_TRANSPORT, default=False): cv.boolean,
             # true for Home Assistant's default prefix, or the prefix itself
             cv.Optional(CONF_HOMEASSISTANT_DISCOVERY, default=False): cv.Any(cv.boolean, _validate_topic_prefix),
             cv.Optional(CONF_BLE_DISCONNECT_TIMEOUT, default="2s"): cv.All(
@@ -223,6 +226,12 @@ CONFIG_SCHEMA = cv.All(
 
 def _final_validate(config):
     full_config = fv.full_config.get()
+    if any(conf.get(CONF_API_TRANSPORT) for conf in (config if isinstance(config, list) else [config])):
+        api_conf = full_config.get("api")
+        if api_conf is None or not api_conf.get("custom_services") or not api_conf.get("homeassistant_services"):
+            raise cv.Invalid(
+                "api_transport needs an api: component with 'custom_services: true' and 'homeassistant_services: true'"
+            )
     if "mqtt" not in full_config:
         # Without MQTT only the lock entity (lock: - platform: nuki_hub) and the automations remain
         LOGGER.warning("nuki_hub: no mqtt: component configured, the Nuki Hub topics are not available.")
@@ -302,6 +311,9 @@ async def to_code(config):
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
+    if config[CONF_API_TRANSPORT]:
+        cg.add_define("USE_NUKI_HUB_API")
+        cg.add(var.set_api_transport(True))
     if discovery := config[CONF_HOMEASSISTANT_DISCOVERY]:
         cg.add(var.set_homeassistant_discovery("homeassistant" if discovery is True else discovery))
     cg.add(var.set_ble_disconnect_timeout(config[CONF_BLE_DISCONNECT_TIMEOUT]))

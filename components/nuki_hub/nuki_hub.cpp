@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <memory>
 
 namespace esphome::nuki_hub {
 
@@ -77,6 +78,11 @@ const char *NukiHubComponent::result_to_string(CmdResult result) {
 
 void NukiHubComponent::setup() {
   this->boot_millis_ = millis();
+#ifdef USE_NUKI_HUB_API
+  if (this->api_transport_) {
+    this->attach_api_();
+  }
+#endif
 
   this->restart_reason_pref_ =
       global_preferences->make_preference<uint8_t>(fnv1_hash(this->topic_prefix_ + "_nuki_hub_restart"));
@@ -457,6 +463,35 @@ void NukiHubComponent::register_handlers_() {
     ESP_LOGD(TAG, "Last published log entry: %" PRIu32, this->log_marker_);
   });
 
+#ifdef USE_MQTT
+  // After a move from Nuki Hub its entities stay in Home Assistant next to the ones announced
+  // here, as their retained discovery topics stay on the broker: this clears those of this
+  // Nuki device
+  this->subscribe_hub_("/maintenance/removeNukiHubDiscovery", [this](const std::string &payload) {
+    if (payload != "1" || this->discovery_prefix_.empty() || this->discovery_nuki_id_ == 0 ||
+        mqtt::global_mqtt_client == nullptr) {
+      return;
+    }
+    char id[12];
+    snprintf(id, sizeof(id), "%08" PRIx32, this->discovery_nuki_id_);
+    const std::string scan_topic = this->discovery_prefix_ + "/+/" + id + "/+/config";
+    auto removed = std::make_shared<uint16_t>(0);
+    mqtt::global_mqtt_client->subscribe(
+        scan_topic,
+        [this, removed](const std::string &topic, const std::string &payload) {
+          if (!payload.empty()) {
+            (*removed)++;
+            this->send_(topic, "", 0, true);
+          }
+        },
+        1);
+    this->set_timeout("nuki_hub_discovery", 10000, [this, scan_topic, removed] {
+      mqtt::global_mqtt_client->unsubscribe(scan_topic);
+      ESP_LOGI(TAG, "Removed %u Home Assistant discovery topics of Nuki Hub", *removed);
+      this->publish_hub_("/maintenance/removeNukiHubDiscovery", to_string(*removed), false);
+    });
+  });
+#endif
   this->subscribe_hub_("/maintenance/reset", [this](const std::string &payload) {
     if (payload != "1") {
       return;
@@ -524,6 +559,7 @@ void NukiHubComponent::on_mqtt_connected_() {
 
   this->log_marker_deadline_ = millis() + 3000;
   this->discovery_published_ = false;
+  this->keypad_published_hashes_.clear();
 
   // What was read before the broker was there, or while it was away, was not published:
   // read everything again
@@ -1317,6 +1353,24 @@ void NukiHubComponent::set_ring_entity_(bool ringing) {
 #endif
 }
 
+// Available when the Nuki device answers and this ESP32 is connected to the broker: the second
+// is the last will of the mqtt: component, without it an entity would stay available while
+// the ESP32 is gone
+void NukiHubComponent::describe_availability_(JsonObject json) {
+#ifdef USE_MQTT
+  JsonArray list = json["availability"].to<JsonArray>();
+  list.add<JsonObject>()["topic"] = this->topic_("/availability");
+  const mqtt::Availability &own = mqtt::global_mqtt_client->get_availability();
+  if (!own.topic.empty()) {
+    JsonObject client = list.add<JsonObject>();
+    client["topic"] = own.topic;
+    client["payload_available"] = own.payload_available;
+    client["payload_not_available"] = own.payload_not_available;
+  }
+  json["availability_mode"] = "all";
+#endif
+}
+
 void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove) {
 #ifdef USE_MQTT
   if (this->discovery_prefix_.empty() || this->discovery_nuki_id_ == 0 || mqtt::global_mqtt_client == nullptr ||
@@ -1338,7 +1392,7 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
   json["unique_id"] = std::string(uid) + "_" + object;
   json["name"] = "Keypad - " + name + " - " + to_string(code_id);
   json["entity_category"] = "diagnostic";
-  json["availability_topic"] = base + "/availability";
+  this->describe_availability_(json);
   json["state_topic"] = base + "/keypad/codes/" + to_string(code_id);
   json["json_attributes_topic"] = base + "/keypad/codes/" + to_string(code_id);
   json["value_template"] = "{{ value_json.enabled }}";
@@ -1409,7 +1463,7 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
     JsonObject json = doc.to<JsonObject>();
     json["unique_id"] = std::string(uid) + "_" + object;
     json["object_id"] = std::string(uid) + "_" + object;
-    json["availability_topic"] = base + "/availability";
+    this->describe_availability_(json);
     JsonObject device = json["device"].to<JsonObject>();
     device["identifiers"].to<JsonArray>().add(uid);
     device["name"] = name.empty() ? std::string("Nuki ") + this->kind() : name;

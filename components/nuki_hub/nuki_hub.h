@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <map>
 #include <vector>
 
 namespace esphome::nuki_hub {
@@ -122,6 +123,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_keypad_publish_code(bool enabled) { this->keypad_publish_code_ = enabled; }
   void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
   void set_keypad_fast_list(bool enabled) { this->keypad_fast_list_ = enabled; }
+  void set_api_transport(bool enabled) { this->api_transport_ = enabled; }
+  /// "<topic_prefix>/<opener|lock>", what the topics of this device start with
+  std::string device_path() const { return this->topic_prefix_ + "/" + this->kind(); }
   void set_keypad_topic_per_entry(bool enabled) { this->keypad_topic_per_entry_ = enabled; }
   void set_keypad_delete_expired(uint32_t after_seconds, const std::string &prefix) {
     this->keypad_delete_expired_after_ = after_seconds;
@@ -285,6 +289,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   Operation make_keypad_operation_();
   void publish_keypad_();
   void publish_keypad_entries_();
+  void describe_availability_(JsonObject json);
   void publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove);
   const nuki_lock::KeypadEntry *find_keypad_entry_(uint16_t code_id) const;
 
@@ -332,8 +337,11 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_publish_code_{true};
   bool keypad_check_code_{false};
   bool keypad_fast_list_{false};
+  bool api_transport_{false};
+  void attach_api_();
   bool keypad_topic_per_entry_{false};
   std::vector<uint16_t> keypad_published_ids_;
+  std::map<uint16_t, uint32_t> keypad_published_hashes_;
   bool keypad_entries_published_{false};
   bool discovery_scan_active_{false};
   uint32_t discovery_nuki_id_{0};

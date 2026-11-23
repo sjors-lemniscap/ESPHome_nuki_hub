@@ -18,6 +18,20 @@ these topics.
 
 20 commands each, 10 for the reads, with `keypad_fast_list: true`.
 
+## Over the ESPHome API instead of a broker
+
+`api_transport: true`, a client connected to the ESP32 itself, 9 commands each
+(`tests/rig/api_transport.py`):
+
+| Operation | average | median | slowest |
+| --- | --- | --- | --- |
+| Keypad add | 273 ms | 244 ms | 646 ms |
+| Keypad update | 220 ms | 211 ms | 296 ms |
+| Keypad delete | 217 ms | 207 ms | 263 ms |
+
+The same as over MQTT: the time is the Bluetooth exchange and the Wi-Fi power saving of
+the ESP32, not the way to it.
+
 ## Many commands
 
 | Operation | total | per command |
@@ -47,12 +61,18 @@ the Wi-Fi link more than with anything in the firmware.
 | --- | --- | --- | --- | --- |
 | Harness with activity log checks and a 20 code burst | 72 | 0 | 0 | 0 |
 | The same while another device held the Opener's connection for 20 s | 72 | 0 | 0 | 0 |
-| Both again on the final build: average 298 ms per command, 95% below 517 ms | 144 | 0 | 0 | 0 |
+| Both again on the final build: average 264 ms per command, 95% below 466 ms | 144 | 0 | 0 | 0 |
 | One hour, a 70 command burst every five minutes | 732 | 0 | 0 | 0 |
 
 In the one hour run a burst of 20 adds, 20 updates, 10 commands at once and 20 deletes took
 35 to 45 seconds, waits for the keypad list included. Free internal RAM stayed at about
 140 kB with 8 MB PSRAM present.
+
+With `keypad_topic_per_entry` only the entries that changed are published after a
+command. Before, every entry and its Home Assistant switch were published again each time:
+two messages per entry per command, about 50 for a keypad with 25 entries, more than the
+29 the MQTT client of ESPHome queues with `idf_send_async`. Messages the client cannot
+take at once now wait in the component and go out in order.
 
 ## Not measured
 

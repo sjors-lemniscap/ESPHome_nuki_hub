@@ -100,8 +100,18 @@ void NukiHubComponent::publish_keypad_entries_() {
     JsonDocument doc;
     JsonObject json = doc.to<JsonObject>();
     keypad_entry_to_json(entry, json, this->keypad_publish_code_);
+    std::string out;
+    serializeJson(doc, out);
+    // Only what changed: with every entry on every change, one command to a keypad with 25
+    // entries would be 50 messages
+    const uint32_t hash = fnv1_hash(out);
+    auto known = this->keypad_published_hashes_.find(entry.codeId);
+    if (known != this->keypad_published_hashes_.end() && known->second == hash) {
+      continue;
+    }
+    this->keypad_published_hashes_[entry.codeId] = hash;
     snprintf(topic, sizeof(topic), "/keypad/codes/%u", entry.codeId);
-    this->publish_json_(topic, doc);
+    this->publish_(topic, out);
     this->publish_keypad_entry_discovery_(entry.codeId, util::fixed_string(entry.name, sizeof(entry.name)), false);
   }
   for (uint16_t code_id : this->keypad_published_ids_) {
@@ -109,6 +119,7 @@ void NukiHubComponent::publish_keypad_entries_() {
       snprintf(topic, sizeof(topic), "/keypad/codes/%u", code_id);
       this->publish_(topic, "");
       this->publish_keypad_entry_discovery_(code_id, "", true);
+      this->keypad_published_hashes_.erase(code_id);
     }
   }
   this->keypad_published_ids_ = std::move(current);
@@ -634,6 +645,10 @@ void NukiHubComponent::finish_keypad_batch_(KeypadBatch &batch) {
   json["result"] = batch.succeeded == batch.total ? "success" : (batch.succeeded == 0 ? "failed" : "partial");
   json["succeeded"] = batch.succeeded;
   json["failed"] = batch.total - batch.succeeded;
+  if (batch.succeeded == batch.total && strcmp(batch.result_topic, "/keypad/expiredResult") == 0) {
+    // Only a delete that failed is held back, the next entry that runs out is deleted at once
+    this->keypad_expiry_not_before_ = 0;
+  }
   json["durationMs"] = millis() - batch.received_at;
   for (JsonPairConst extra : batch.summary.as<JsonObjectConst>()) {
     json[extra.key()] = extra.value();
