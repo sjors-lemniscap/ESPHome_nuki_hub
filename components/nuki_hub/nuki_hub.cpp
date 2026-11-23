@@ -140,6 +140,7 @@ void NukiHubComponent::setup() {
     }
   }
 
+  this->register_handlers_();
   this->setup_device();
   this->add_on_state_callback([this] { this->update_entities_(); });
 
@@ -255,10 +256,12 @@ void NukiHubComponent::on_log_(uint8_t level, const char *message, size_t length
 }
 
 bool NukiHubComponent::publish_(const char *suffix, const std::string &payload, bool retain) {
+  this->message_callback_.call(suffix, payload);
   return mqtt_publish(this->topic_(suffix), payload.c_str(), payload.size(), retain);
 }
 
 bool NukiHubComponent::publish_(const char *suffix, const char *payload, bool retain) {
+  this->message_callback_.call(suffix, payload);
   return mqtt_publish(this->topic_(suffix), payload, strlen(payload), retain);
 }
 
@@ -279,174 +282,185 @@ bool NukiHubComponent::publish_hub_(const char *suffix, const std::string &paylo
 }
 
 void NukiHubComponent::subscribe_(const char *suffix, std::function<void(const std::string &)> &&callback) {
-#ifdef USE_MQTT
-  mqtt::global_mqtt_client->subscribe(
-      this->topic_(suffix),
-      [callback = std::move(callback)](const std::string &topic, const std::string &payload) { callback(payload); },
-      1);
-#endif
+  this->handlers_.push_back({suffix, false, std::move(callback)});
 }
 
 void NukiHubComponent::subscribe_hub_(const char *suffix, std::function<void(const std::string &)> &&callback) {
-#ifdef USE_MQTT
-  mqtt::global_mqtt_client->subscribe(
-      this->hub_topic_(suffix),
-      [callback = std::move(callback)](const std::string &topic, const std::string &payload) { callback(payload); },
-      1);
-#endif
+  this->handlers_.push_back({suffix, true, std::move(callback)});
+}
+
+// Everything the component can be told, by MQTT message or by the nuki_hub.command action
+void NukiHubComponent::register_handlers_() {
+
+  this->subscribe_("/action", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    ESP_LOGI(TAG, "%s action received: %s", this->kind(), payload.c_str());
+    // The plain action name of Nuki Hub, or {"action": "...", "requestId": "..."}
+    std::string action = payload;
+    std::string request_id;
+    uint8_t timeout = 0;
+    if (payload[0] == '{') {
+      JsonDocument json;
+      if (deserializeJson(json, payload) || !json["action"].is<const char *>()) {
+        this->publish_("/action", "unknown_action");
+        return;
+      }
+      action = json["action"].as<const char *>();
+      request_id = util::as_text(json["requestId"]);
+      timeout = json["timeout"].as<unsigned int>();
+    }
+    if (!this->is_paired()) {
+      this->publish_("/action", "denied");
+      this->publish_("/commandResult", "notPaired");
+      this->publish_result_("/actionResult", request_id, action, "notPaired", false, millis());
+      return;
+    }
+    if (this->queue_action(action, request_id, timeout)) {
+      this->publish_("/action", "ack");
+    } else {
+      this->publish_("/action", "unknown_action");
+      this->publish_result_("/actionResult", request_id, action, "unknown_action", false, millis());
+    }
+  });
+
+  auto query = [this](const char *suffix, bool *flag) {
+    this->subscribe_(suffix, [this, suffix, flag](const std::string &payload) {
+      if (payload != "1") {
+        return;
+      }
+      *flag = true;
+      this->publish_(suffix, "0");
+    });
+  };
+  query("/query/lockstate", &this->want_state_);
+  query("/query/config", &this->want_config_);
+  query("/query/battery", &this->want_battery_);
+  query("/query/keypad", &this->want_keypad_);
+  query("/query/authorizations", &this->want_auth_);
+  query("/query/timecontrol", &this->want_time_control_);
+  query("/query/fingerprints", &this->want_fingerprints_);
+
+  this->subscribe_("/keypad/actionJson", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_keypad_action_(payload);
+  });
+  // {"from": 100, "to": 120, "requestId": "..."}: log entries by index, on logRange
+  this->subscribe_("/query/logRange", [this](const std::string &payload) {
+    if (is_placeholder(payload) || payload == "0") {
+      return;
+    }
+    const std::string request_id = util::request_id(payload);
+    JsonDocument json;
+    const bool valid = !deserializeJson(json, payload) && json["from"].is<unsigned int>();
+    const uint32_t from = valid ? json["from"].as<unsigned int>() : 0;
+    const uint32_t to = valid && json["to"].is<unsigned int>() ? json["to"].as<unsigned int>() : from;
+    const char *refusal = nullptr;
+    if (!valid || from == 0 || to < from) {
+      refusal = "invalidRange";
+    } else if (to - from >= 100) {
+      refusal = "rangeTooLarge";
+    } else if (!this->is_paired()) {
+      refusal = "notPaired";
+    } else if (!this->pin_valid_) {
+      refusal = "noValidPinSet";
+    }
+    if (refusal != nullptr) {
+      this->publish_result_("/logRange", request_id, "", refusal, false, millis());
+      return;
+    }
+    this->queue_log_range(from, to, request_id);
+  });
+  this->subscribe_("/keypad/batchJson", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_keypad_batch_(payload);
+  });
+  this->subscribe_("/keypad/syncJson", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_keypad_sync_(payload);
+  });
+  this->subscribe_("/authorization/action", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_auth_action_(payload);
+  });
+  this->subscribe_("/timecontrol/action", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_time_control_action(payload);
+  });
+  this->subscribe_("/configuration/action", [this](const std::string &payload) {
+    if (is_placeholder(payload)) {
+      return;
+    }
+    this->handle_config_action(payload);
+  });
+
+  // The marker of the last published log entry survives a restart as a retained message
+  this->subscribe_("/lastRollingLog", [this](const std::string &payload) {
+    if (this->log_marker_known_ || this->log_marker_in_flash_ || !util::is_number(payload)) {
+      return;
+    }
+    this->log_marker_ = strtoul(payload.c_str(), nullptr, 10);
+    this->log_marker_known_ = true;
+    ESP_LOGD(TAG, "Last published log entry: %" PRIu32, this->log_marker_);
+  });
+
+  this->subscribe_hub_("/maintenance/reset", [this](const std::string &payload) {
+    if (payload != "1") {
+      return;
+    }
+    ESP_LOGI(TAG, "Restart requested via MQTT");
+    this->publish_hub_("/maintenance/reset", "0");
+    // A clean disconnect sends no last will: say it here
+    if (this->maintenance_enabled_) {
+      this->publish_hub_("/maintenance/mqttConnectionState", "offline");
+    }
+    uint8_t reason = RESTART_REASON_MQTT;
+    this->restart_reason_pref_.save(&reason);
+    global_preferences->sync();
+    // Commands that will not be executed anymore get an answer instead of silence
+    std::deque<Operation> dropped;
+    dropped.swap(this->queue_);
+    for (auto &op : dropped) {
+      if (op.done) {
+        op.done(CmdResult::Error);
+      }
+    }
+    this->set_timeout("restart", 500, [] { App.safe_reboot(); });
+  });
+}
+
+bool NukiHubComponent::command(const std::string &topic, const std::string &payload) {
+  for (const auto &handler : this->handlers_) {
+    if (!handler.hub && handler.suffix == topic) {
+      handler.callback(payload);
+      return true;
+    }
+  }
+  ESP_LOGW(TAG, "No command topic '%s'", topic.c_str());
+  return false;
 }
 
 void NukiHubComponent::on_mqtt_connected_() {
 #ifdef USE_MQTT
   if (!this->subscribed_) {
     this->subscribed_ = true;
-
-    this->subscribe_("/action", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      ESP_LOGI(TAG, "%s action received: %s", this->kind(), payload.c_str());
-      // The plain action name of Nuki Hub, or {"action": "...", "requestId": "..."}
-      std::string action = payload;
-      std::string request_id;
-      uint8_t timeout = 0;
-      if (payload[0] == '{') {
-        JsonDocument json;
-        if (deserializeJson(json, payload) || !json["action"].is<const char *>()) {
-          this->publish_("/action", "unknown_action");
-          return;
-        }
-        action = json["action"].as<const char *>();
-        request_id = util::as_text(json["requestId"]);
-        timeout = json["timeout"].as<unsigned int>();
-      }
-      if (!this->is_paired()) {
-        this->publish_("/action", "denied");
-        this->publish_("/commandResult", "notPaired");
-        this->publish_result_("/actionResult", request_id, action, "notPaired", false, millis());
-        return;
-      }
-      if (this->queue_action(action, request_id, timeout)) {
-        this->publish_("/action", "ack");
-      } else {
-        this->publish_("/action", "unknown_action");
-        this->publish_result_("/actionResult", request_id, action, "unknown_action", false, millis());
-      }
-    });
-
-    auto query = [this](const char *suffix, bool *flag) {
-      this->subscribe_(suffix, [this, suffix, flag](const std::string &payload) {
-        if (payload != "1") {
-          return;
-        }
-        *flag = true;
-        this->publish_(suffix, "0");
-      });
-    };
-    query("/query/lockstate", &this->want_state_);
-    query("/query/config", &this->want_config_);
-    query("/query/battery", &this->want_battery_);
-    query("/query/keypad", &this->want_keypad_);
-    query("/query/authorizations", &this->want_auth_);
-    query("/query/timecontrol", &this->want_time_control_);
-    query("/query/fingerprints", &this->want_fingerprints_);
-
-    this->subscribe_("/keypad/actionJson", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_keypad_action_(payload);
-    });
-    // {"from": 100, "to": 120, "requestId": "..."}: log entries by index, on logRange
-    this->subscribe_("/query/logRange", [this](const std::string &payload) {
-      if (is_placeholder(payload) || payload == "0") {
-        return;
-      }
-      const std::string request_id = util::request_id(payload);
-      JsonDocument json;
-      const bool valid = !deserializeJson(json, payload) && json["from"].is<unsigned int>();
-      const uint32_t from = valid ? json["from"].as<unsigned int>() : 0;
-      const uint32_t to = valid && json["to"].is<unsigned int>() ? json["to"].as<unsigned int>() : from;
-      const char *refusal = nullptr;
-      if (!valid || from == 0 || to < from) {
-        refusal = "invalidRange";
-      } else if (to - from >= 100) {
-        refusal = "rangeTooLarge";
-      } else if (!this->is_paired()) {
-        refusal = "notPaired";
-      } else if (!this->pin_valid_) {
-        refusal = "noValidPinSet";
-      }
-      if (refusal != nullptr) {
-        this->publish_result_("/logRange", request_id, "", refusal, false, millis());
-        return;
-      }
-      this->queue_log_range(from, to, request_id);
-    });
-    this->subscribe_("/keypad/batchJson", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_keypad_batch_(payload);
-    });
-    this->subscribe_("/keypad/syncJson", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_keypad_sync_(payload);
-    });
-    this->subscribe_("/authorization/action", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_auth_action_(payload);
-    });
-    this->subscribe_("/timecontrol/action", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_time_control_action(payload);
-    });
-    this->subscribe_("/configuration/action", [this](const std::string &payload) {
-      if (is_placeholder(payload)) {
-        return;
-      }
-      this->handle_config_action(payload);
-    });
-
-    // The marker of the last published log entry survives a restart as a retained message
-    this->subscribe_("/lastRollingLog", [this](const std::string &payload) {
-      if (this->log_marker_known_ || this->log_marker_in_flash_ || !util::is_number(payload)) {
-        return;
-      }
-      this->log_marker_ = strtoul(payload.c_str(), nullptr, 10);
-      this->log_marker_known_ = true;
-      ESP_LOGD(TAG, "Last published log entry: %" PRIu32, this->log_marker_);
-    });
-
-    this->subscribe_hub_("/maintenance/reset", [this](const std::string &payload) {
-      if (payload != "1") {
-        return;
-      }
-      ESP_LOGI(TAG, "Restart requested via MQTT");
-      this->publish_hub_("/maintenance/reset", "0");
-      // A clean disconnect sends no last will: say it here
-      if (this->maintenance_enabled_) {
-        this->publish_hub_("/maintenance/mqttConnectionState", "offline");
-      }
-      uint8_t reason = RESTART_REASON_MQTT;
-      this->restart_reason_pref_.save(&reason);
-      global_preferences->sync();
-      // Commands that will not be executed anymore get an answer instead of silence
-      std::deque<Operation> dropped;
-      dropped.swap(this->queue_);
-      for (auto &op : dropped) {
-        if (op.done) {
-          op.done(CmdResult::Error);
-        }
-      }
-      this->set_timeout("restart", 500, [] { App.safe_reboot(); });
-    });
+    for (const auto &handler : this->handlers_) {
+      const auto *callback = &handler.callback;
+      mqtt::global_mqtt_client->subscribe(
+          handler.hub ? this->hub_topic_(handler.suffix.c_str()) : this->topic_(handler.suffix.c_str()),
+          [callback](const std::string &topic, const std::string &payload) { (*callback)(payload); }, 1);
+    }
   }
 
   this->log_marker_deadline_ = millis() + 3000;

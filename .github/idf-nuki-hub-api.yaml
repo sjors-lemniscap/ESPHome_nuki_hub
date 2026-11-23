@@ -12,6 +12,18 @@ wifi:
   password: "test1234"
 
 api:
+  homeassistant_services: true
+  # Keypad codes from Home Assistant without MQTT: the command goes in through an action,
+  # the answer comes back as an event
+  actions:
+    - action: keypad_command
+      variables:
+        payload: string
+      then:
+        - nuki_hub.command:
+            id: opener
+            topic: /keypad/actionJson
+            payload: !lambda "return payload;"
 
 logger:
 
@@ -27,6 +39,16 @@ nuki_hub:
     type: opener
     topic_prefix: door
     pairing_mode_at_boot: true
+    on_message:
+      - if:
+          condition:
+            lambda: 'return topic == "/keypad/result" || topic == "/keypad/json" || topic == "/event/keypad";'
+          then:
+            - homeassistant.event:
+                event: esphome.nuki_hub
+                data:
+                  topic: !lambda "return topic;"
+                  payload: !lambda "return payload;"
 
 lock:
   - platform: nuki_hub

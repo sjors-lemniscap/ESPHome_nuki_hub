@@ -313,6 +313,8 @@ button:
 | | |
 | --- | --- |
 | `nuki_hub.action` | Queues a lock action by its name, see `action` under [Topics](#topics). `action` can be a lambda |
+| `nuki_hub.command` | Does what a message on a command topic does: `topic` is the part after `<prefix>/<kind>` (`/keypad/actionJson`, `/keypad/syncJson`, `/timecontrol/action`, ...), `payload` the message. Works without MQTT |
+| `on_message` (trigger, in the `nuki_hub:` entry) | Fires for everything the device publishes, with `topic` (same form) and `payload`. Works without MQTT |
 | `nuki_hub.set_pairing_mode` | `pairing_mode: true` looks for a Nuki device in pairing mode until one is paired |
 | `nuki_hub.unpair` | Forgets the pairing |
 | `nuki_hub.paired` | Condition: a pairing is stored |
@@ -363,6 +365,44 @@ text_sensor:
     last_user:
       name: Entrance last user
 ```
+
+**Keypad codes from Home Assistant without MQTT.** `nuki_hub.command` and `on_message`
+carry the same JSON over the ESPHome API: the command goes in through an API action, the
+answer comes back as a Home Assistant event.
+
+```yaml
+api:
+  homeassistant_services: true
+  actions:
+    - action: keypad_command
+      variables:
+        payload: string
+      then:
+        - nuki_hub.command:
+            id: entrance
+            topic: /keypad/actionJson
+            payload: !lambda "return payload;"
+
+nuki_hub:
+  - id: entrance
+    # ...
+    on_message:
+      - if:
+          condition:
+            lambda: 'return topic == "/keypad/result" || topic == "/keypad/json";'
+          then:
+            - homeassistant.event:
+                event: esphome.nuki_hub
+                data:
+                  topic: !lambda "return topic;"
+                  payload: !lambda "return payload;"
+```
+
+In Home Assistant, `esphome.<node>_keypad_command` with
+`payload: '{"action":"add","name":"guest","code":345678,"requestId":"1"}'` adds the code, and
+the event `esphome.nuki_hub` brings `{"requestId":"1","result":"success","codeId":105,...}`.
+(ESPHome's API actions can only return data directly when they are written in YAML with
+`api.respond`, which cannot wait for a Bluetooth command; hence the event.)
 
 If Home Assistant is not always connected, set `api: reboot_timeout: 0s`: ESPHome otherwise
 restarts the ESP32 after 15 minutes without an API client.

@@ -180,6 +180,13 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// Queues a device action by its Nuki Hub name ("activateRTO", "unlock", ...). False if unknown.
   bool request_action(const std::string &action);
   void request_state_update() { this->want_state_ = true; }
+  /// Does what a message on the command topic `topic` ("/keypad/actionJson", "/action", ...)
+  /// does, without MQTT. False if there is no such topic.
+  bool command(const std::string &topic, const std::string &payload);
+  /// Called with the topic below `<prefix>/<kind>` and the payload of everything published
+  template<typename F> void add_on_message_callback(F &&callback) {
+    this->message_callback_.add(std::forward<F>(callback));
+  }
 
   /// The device state for a lock entity
   virtual lock::LockState entity_state() const = 0;
@@ -235,6 +242,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void subscribe_(const char *suffix, std::function<void(const std::string &)> &&callback);
   void subscribe_hub_(const char *suffix, std::function<void(const std::string &)> &&callback);
 
+  void register_handlers_();
   void on_mqtt_connected_();
   void publish_maintenance_(bool initial);
   void set_available_(bool available);
@@ -429,6 +437,13 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   std::string last_auth_name_;
 
   CallbackManager<void()> state_callback_;
+  CallbackManager<void(std::string, std::string)> message_callback_;
+  struct Handler {
+    std::string suffix;
+    bool hub;
+    std::function<void(const std::string &)> callback;
+  };
+  std::vector<Handler> handlers_;
 };
 
 // Helpers shared by the device classes
