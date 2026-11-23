@@ -235,6 +235,12 @@ bool NukiBle::connect_ble(bool pairing) {
     // radio starves the connection attempt of airtime). Going through DISCOVERED instead
     // - the same state BLEClientBase's own default parse_device() sets - lets the tracker
     // pause/resume scanning around the connection like it does for every other BLE client.
+    if (this->fast_connection_) {
+      // The interval a connection starts with is the choice of the side that opens it: asked
+      // for here, it holds from the first exchange. (An Opener moves to 15 ms by itself soon
+      // after, whatever is asked for: tried, a fixed 7.5 ms does not stay.)
+      this->set_conn_params_(0x06, 0x0C, 0, 400, "fast");
+    }
     this->set_state(esphome::esp32_ble_tracker::ClientState::DISCOVERED);
   }
   return false;
@@ -1394,6 +1400,15 @@ bool NukiBle::register_on_usdio_char() {
 // write and returns false for events that aren't for this client), then adds Nuki-specific
 // handling on top - discovering the relevant characteristic once services are known,
 // tracking notify-subscription completion, and routing incoming data to notify_callback().
+// Asked from the stack: ESPHome keeps the event that reports an update to itself
+uint16_t NukiBle::get_connection_interval() {
+  esp_gap_conn_params_t params{};
+  if (esp_ble_get_current_conn_params(this->remote_bda_, &params) == ESP_OK) {
+    this->conn_interval_ = params.interval;
+  }
+  return this->conn_interval_;
+}
+
 bool NukiBle::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                                   esp_ble_gattc_cb_param_t *param) {
   if (!esphome::esp32_ble_client::BLEClientBase::gattc_event_handler(event, gattc_if, param)) {

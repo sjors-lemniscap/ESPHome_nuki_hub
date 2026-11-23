@@ -10,11 +10,11 @@ these topics.
 
 | Operation | average | median | 95% | slowest |
 | --- | --- | --- | --- | --- |
-| Keypad add | 285 ms | 249 ms | 515 ms | 515 ms |
-| Keypad update | 220 ms | 214 ms | 253 ms | 253 ms |
-| Keypad delete | 312 ms | 289 ms | 622 ms | 622 ms |
-| State read, connection open | 269 ms | 308 ms | 514 ms | 514 ms |
-| Keypad list read, new connection | 1653 ms | 1586 ms | 3024 ms | 3024 ms |
+| Keypad add | 191 ms | 194 ms | 254 ms | 254 ms |
+| Keypad update | 223 ms | 207 ms | 478 ms | 478 ms |
+| Keypad delete | 213 ms | 201 ms | 402 ms | 402 ms |
+| State read, connection open | 221 ms | 217 ms | 284 ms | 284 ms |
+| Keypad list read, new connection | 1947 ms | 1458 ms | 3415 ms | 3415 ms |
 
 20 commands each, 10 for the reads, with `keypad_fast_list: true`.
 
@@ -25,22 +25,21 @@ these topics.
 
 | Operation | average | median | slowest |
 | --- | --- | --- | --- |
-| Keypad add | 273 ms | 244 ms | 646 ms |
-| Keypad update | 220 ms | 211 ms | 296 ms |
-| Keypad delete | 217 ms | 207 ms | 263 ms |
+| Keypad add | 181 ms | 170 ms | 257 ms |
+| Keypad update | 167 ms | 154 ms | 257 ms |
+| Keypad delete | 169 ms | 163 ms | 205 ms |
 
-The same as over MQTT: the time is the Bluetooth exchange and the Wi-Fi power saving of
-the ESP32, not the way to it.
+A little faster than over MQTT, which has the broker in between.
 
 ## Many commands
 
 | Operation | total | per command |
 | --- | --- | --- |
-| 20 adds as one batch | 4.4 s | 219 ms |
-| 20 deletes as one batch | 4.3 s | 215 ms |
-| Sync that adds 20 entries (reads the list first) | 4.9 s | 245 ms |
-| Sync with nothing to do (reads the list) | 1.1 s | |
-| Sync that deletes 20 entries | 5.4 s | 271 ms |
+| 20 adds as one batch | 2.7 s | 133 ms |
+| 20 deletes as one batch | 2.6 s | 131 ms |
+| Sync that adds 20 entries (reads the list first) | 3.1 s | 153 ms |
+| Sync with nothing to do (reads the list) | 1.2 s | |
+| Sync that deletes 20 entries | 3.4 s | 172 ms |
 
 A batch saves the trip over Wi-Fi and the broker for every command but the first. Wi-Fi
 power saving, which the ESP32 needs while Bluetooth is on, delays incoming packets by up to a
@@ -54,6 +53,26 @@ the Wi-Fi link more than with anything in the firmware.
 | Stepping a command every 20 ms, default connection interval | 458-475 ms | 6.1 s |
 | Stepping continuously, connection interval 7.5-15 ms (`fast_connection`, the default) | 384-407 ms | 4.6 s |
 | The same with `keypad_fast_list: true` | 220-312 ms | 4.7 s |
+| Commands started the moment they arrive, published with QoS 0 | 190-225 ms | 2.7 s |
+
+## Where the time of a command goes
+
+Keypad updates one right after the other on an open connection (`tests/rig/quick_bench.js`),
+what the client waits and what the ESP32 itself needs from receiving a command to answering:
+
+| | client | ESP32 |
+| --- | --- | --- |
+| Before: a look at the queue every 100 ms while idle, QoS 1 | 380-420 ms | 174 ms |
+| Commands started the moment they arrive | 340-380 ms | 134 ms |
+| And published with QoS 0 | 220-235 ms | 130-135 ms |
+
+The 130 ms on the ESP32 are the exchange with the Opener: a challenge, the command, its
+status, each waiting for the next connection event, 15 ms apart. The Opener chooses that
+interval itself: a connection opened at 7.5 ms is moved to 15 ms by it shortly after.
+Packets are not the limit (the Opener agrees to 247 bytes, a command fits in one), and
+writing without waiting for an acknowledgement gained nothing. Keeping Wi-Fi out of power
+save while commands arrive gained nothing either. What QoS 1 costs is explained with the
+[results](topics.md#command-queue-and-results).
 
 ## Under load
 
@@ -61,7 +80,7 @@ the Wi-Fi link more than with anything in the firmware.
 | --- | --- | --- | --- | --- |
 | Harness with activity log checks and a 20 code burst | 72 | 0 | 0 | 0 |
 | The same while another device held the Opener's connection for 20 s | 72 | 0 | 0 | 0 |
-| Both again on the final build: average 264 ms per command, 95% below 466 ms | 144 | 0 | 0 | 0 |
+| Both again on the final build: average 207 ms per command, 95% below 295 ms | 144 | 0 | 0 | 0 |
 | One hour, a 70 command burst every five minutes | 732 | 0 | 0 | 0 |
 
 In the one hour run a burst of 20 adds, 20 updates, 10 commands at once and 20 deletes took
@@ -80,10 +99,10 @@ take at once now wait in the component and go out in order.
 
 | | with PSRAM | without |
 | --- | --- | --- |
-| Sync that adds 80 entries (two parts of 50 and 30) | 22.0 s, 275 ms each | 21.6 s, 270 ms each |
-| List read, 25.6 kB | 220 ms | 4.7 s, in 9 pages |
+| Sync that adds 80 entries (two parts of 50 and 30) | 13.4 s, 168 ms each | 21.6 s, 270 ms each (before the last speed-up) |
+| List read, 25.6 kB | 132 ms | 4.7 s, in 9 pages |
 | Single add / update / delete with all there | 459 / 985 / 295 ms | 931 / 271 / 322 ms |
-| Sync that removes them | 22.7 s | 23.1 s |
+| Sync that removes them | 14.6 s | 23.1 s |
 | Lowest free internal RAM | 88 kB | 32 kB |
 
 ## Not measured

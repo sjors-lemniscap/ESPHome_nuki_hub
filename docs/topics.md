@@ -172,6 +172,14 @@ Results are published retained, like Nuki Hub does. When the ESP32 connects to t
 the command topics and `keypad/commandResultJson` are reset to `--`; the other results keep
 their last value.
 
+Messages are published with QoS 0. With QoS 1 (`mqtt_qos: 1`) the broker acknowledges every
+message with a small packet of its own, and the next command for the ESP32 waits behind
+those in the broker's connection until the ESP32 has acknowledged them, which a small TCP
+stack does up to a quarter of a second later. Measured, that is 115 ms on every command that
+follows another. A broker that sends without delay (`set_tcp_nodelay true` in Mosquitto)
+should not have this cost; that was not tried here. What QoS 1 adds is a repeat after a
+lost connection, and after one everything is read and published again anyway.
+
 Only one command at a time can travel over the Bluetooth link. Commands that arrive while
 another one is running wait in a queue (64 deep) and are answered one after the other, in the
 order they arrived; lock actions go first. A command that gets no answer is retried

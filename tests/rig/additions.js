@@ -192,7 +192,8 @@ async function freshList() {
   if (marker > 3) {
     r = await command('/query/logRange', '/logRange', { from: marker - 2, to: marker }, 60000);
     check('log range returns the entries asked for', r.result === 'success' && r.entries?.length === 3
-      && r.entries[0].index === marker - 2 && r.entries[2].index === marker, JSON.stringify(r).slice(0, 200));
+      && r.entries[0].index === marker - 2 && r.entries[2].index === marker,
+    `marker ${marker}, entries ${(r.entries || []).map((e) => e.index).join(' ')}, ${JSON.stringify({ ...r, entries: undefined })}`);
   }
 
   // --- lock action as JSON

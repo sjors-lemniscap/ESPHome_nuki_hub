@@ -230,6 +230,13 @@ std::string NukiHubComponent::hub_topic_(const char *suffix) const { return this
 // Everything goes out through here. The MQTT client may refuse a message for the moment (with
 // idf_send_async its queue holds 29): such a message waits in outbox_ and is sent from loop(),
 // and so does everything after it, to keep the order. Log lines (qos 0) are not kept.
+//
+// Messages go out with QoS 0 unless mqtt_qos says otherwise. With QoS 1 the broker answers
+// every message with an acknowledgement of its own, a small packet each, and the next command
+// for the ESP32 waits behind those in the broker's connection until the ESP32 has acknowledged
+// them, which it does up to a quarter of a second later: measured, 115 ms per command. What
+// QoS 1 would add is a repeat after a lost connection, and everything is read and published
+// again after one anyway.
 bool NukiHubComponent::send_(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos) {
 #ifdef USE_MQTT
   if (mqtt::global_mqtt_client == nullptr) {
@@ -240,7 +247,8 @@ bool NukiHubComponent::send_(const std::string &topic, const char *payload, size
     // reconnect does not repeat: it waits for the broker
     return retain && length == 0 && this->keep_(topic, payload, 0, true);
   }
-  if (this->outbox_.empty() && mqtt::global_mqtt_client->publish(topic.c_str(), payload, length, qos, retain)) {
+  if (this->outbox_.empty() &&
+      mqtt::global_mqtt_client->publish(topic.c_str(), payload, length, qos == 0 ? 0 : this->publish_qos_, retain)) {
     return true;
   }
   return qos != 0 && this->keep_(topic, payload, length, retain);
@@ -298,8 +306,8 @@ void NukiHubComponent::flush_outbox_() {
   }
   for (int i = 0; i < 8 && !this->outbox_.empty(); i++) {
     const Outgoing message = this->outbox_.front();
-    if (!mqtt::global_mqtt_client->publish(message.data, message.data + message.topic_length + 1, message.length, 1,
-                                           message.retain)) {
+    if (!mqtt::global_mqtt_client->publish(message.data, message.data + message.topic_length + 1, message.length,
+                                           this->publish_qos_, message.retain)) {
       break;
     }
     this->outbox_.pop_front();
@@ -753,6 +761,8 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
     json["failed"] = this->stat_failed_;
     json["retries"] = this->stat_retries_;
     json["averageMs"] = this->stat_commands_ ? this->stat_total_ms_ / this->stat_commands_ : 0;
+    // What every exchange of a command is counted in; 0 while there is no connection
+    json["connectionIntervalMs"] = this->ble()->get_connection_interval() * 1.25f;
     json["maxMs"] = this->stat_max_ms_;
     this->publish_json_("/bluetoothJson", json);
   }
@@ -1102,7 +1112,10 @@ void NukiHubComponent::loop() {
     this->high_frequency_.stop();
     this->high_frequency_since_ = now;
   }
-  if (now - this->last_loop_ < (busy ? 2 : 100)) {
+  // With nothing to do a look ten times a second is enough; a command that arrived must not
+  // wait for that
+  const bool active = busy || !this->queue_.empty() || this->keypad_commands_pending_ > 0;
+  if (now - this->last_loop_ < (active ? 2 : 100)) {
     return;
   }
   this->last_loop_ = now;

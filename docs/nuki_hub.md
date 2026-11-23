@@ -84,6 +84,7 @@ nuki_hub:
 | `log_marker_in_flash` | `false` | Keep the index of the last published log entry in flash instead of reading it back from the retained `lastRollingLog` |
 | `homeassistant_discovery` | `false` | `true` or a discovery prefix: announce the device to Home Assistant over MQTT |
 | `api_transport` | `false` | The topics over the ESPHome API as well: an action for commands and an event for everything published, see [Without a broker](topics.md#without-a-broker) |
+| `mqtt_qos` | `0` | QoS of what is published. `1` costs about 115 ms per command with most brokers, see [results](topics.md#command-queue-and-results) |
 | `authorization_add` | `false` | Let a client create authorizations with `authorization/action`. An authorization is permanent access to the Nuki device for whoever holds its key |
 | `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
 | `fast_connection` | `true` | Ask for a short Bluetooth connection interval (7.5 to 15 ms) while connected. Commands get faster, see [measurements](benchmarks.md) |
@@ -166,6 +167,7 @@ removed. Treat the key like a password: it opens the door.
 - Per-entry keypad topics are keyed by code id (`keypad/codes/<code id>`), not by position.
   No per-entry topics for authorizations and no single value topics next to the JSON ones.
 - `authorization/action` adds an authorization only with `authorization_add: true`.
+- Messages are published with QoS 0 unless `mqtt_qos: 1` is set.
 - No hybrid mode (official MQTT of Smart Lock 4/5), GPIO lock control, HTTP bridge API.
 - An accepted lock action is given 15 seconds (an Opener: strike delay plus strike duration
   plus 5 seconds, if that is more) to report its completion instead of the command timeout, so an action is not repeated

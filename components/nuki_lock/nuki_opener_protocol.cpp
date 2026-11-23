@@ -423,7 +423,13 @@ void NukiOpener::handle_return_message(Command returnCode, unsigned char *data, 
       break;
     }
     case Command::Status: {
-      if (dataLen >= 1 && data[0] == (uint8_t) CommandStatus::Complete) {
+      // Only the "complete" that follows the list request ends the list. The one of the command
+      // before can still be on its way when the next command starts right behind it, and
+      // would end the list after its first entry.
+      const CommandState state = this->get_command_state();
+      const bool request_sent =
+          this->list_waiting_ || state == CommandState::CmdSent || state == CommandState::CmdAccepted;
+      if (dataLen >= 1 && data[0] == (uint8_t) CommandStatus::Complete && request_sent) {
         this->list_complete_ = true;
       }
       NukiBle::handle_return_message(returnCode, data, dataLen);

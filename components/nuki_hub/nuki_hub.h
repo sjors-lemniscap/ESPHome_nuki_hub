@@ -128,6 +128,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
   void set_keypad_fast_list(bool enabled) { this->keypad_fast_list_ = enabled; }
   void set_api_transport(bool enabled) { this->api_transport_ = enabled; }
+  void set_mqtt_qos(uint8_t qos) { this->publish_qos_ = qos; }
   void set_authorization_add(bool enabled) { this->authorization_add_ = enabled; }
   /// "<topic_prefix>/<opener|lock>", what the topics of this device start with
   std::string device_path() const { return this->topic_prefix_ + "/" + this->kind(); }
@@ -377,6 +378,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_entries_more_{false};
   uint32_t keypad_entries_at_{0};
   bool interrupted_{false};
+  uint8_t publish_qos_{0};
   bool last_publish_too_large_{false};
   uint8_t keypad_pages_published_{0};
   /// Switches in Home Assistant for the entries of a list (authorizations, time control)

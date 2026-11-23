@@ -73,6 +73,7 @@ CONF_ACTION = "action"
 CONF_PAIRING_MODE = "pairing_mode"
 CONF_ON_MESSAGE = "on_message"
 CONF_API_TRANSPORT = "api_transport"
+CONF_MQTT_QOS = "mqtt_qos"
 CONF_AUTHORIZATION_ADD = "authorization_add"
 
 TYPE_OPENER = "opener"
@@ -173,6 +174,8 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
             # The topics as an action and an event of the ESPHome API, see docs/nuki_hub.md
             cv.Optional(CONF_API_TRANSPORT, default=False): cv.boolean,
+            # 1 costs about 115 ms per command unless the broker sends without delay, see docs/topics.md
+            cv.Optional(CONF_MQTT_QOS, default=0): cv.int_range(min=0, max=1),
             # Lets a client create authorizations: permanent access for whoever gets the key
             cv.Optional(CONF_AUTHORIZATION_ADD, default=False): cv.boolean,
             # true for Home Assistant's default prefix, or the prefix itself
@@ -315,6 +318,7 @@ async def to_code(config):
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
     cg.add(var.set_authorization_add(config[CONF_AUTHORIZATION_ADD]))
+    cg.add(var.set_mqtt_qos(config[CONF_MQTT_QOS]))
     if config[CONF_API_TRANSPORT]:
         cg.add_define("USE_NUKI_HUB_API")
         cg.add(var.set_api_transport(True))

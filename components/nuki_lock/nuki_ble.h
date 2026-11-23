@@ -116,6 +116,10 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * commands faster at the price of more radio time while the connection is open.
      */
     void set_fast_connection(bool enable) { this->fast_connection_ = enable; }
+    /// Where the exchange of the command in progress stands
+    CommandState get_command_state() const { return this->nuki_command_state_; }
+    /// The interval of the connection as it is now, in units of 1.25 ms (0: not known)
+    uint16_t get_connection_interval();
     
     /**
      * @brief Set the BLE Connect Timeout in seconds.
@@ -527,6 +531,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     uint32_t command_timeout_duration_ = 3000;
     uint32_t action_timeout_duration_ = 15000;
     bool fast_connection_ = false;
+    uint16_t conn_interval_ = 0;
     // The address of the paired device, to restore it if the client base drops it
     uint64_t paired_address_ = 0;
     void save_paired_address_();
