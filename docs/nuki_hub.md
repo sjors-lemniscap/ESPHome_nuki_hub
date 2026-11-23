@@ -606,6 +606,8 @@ Failure cases tried on the rig:
 - **Another device holding the Opener's Bluetooth connection** for 20 seconds during a burst:
   no command lost.
 
+- **Commands from Home Assistant** through its own API: lock and unlock, a setting as a
+  switch and one as a number changed and changed back, a keypad code disabled and enabled.
 - **Wi-Fi away for a minute**: the last will sets the ESP32 offline at the broker, four
   seconds after Wi-Fi is back everything is published again, no restart, commands work.
 - **Home Assistant 2026.10 with its MQTT integration** on the same broker: all announced
@@ -625,5 +627,5 @@ Failure cases tried on the rig:
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
 pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, a
-real Nuki device losing power or range (only simulated with a device that never existed),
-and commands from Home Assistant's own interface.
+and a real Nuki device losing power or range (only simulated with a device that never
+existed).

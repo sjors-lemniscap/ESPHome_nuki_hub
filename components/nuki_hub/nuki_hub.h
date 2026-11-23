@@ -371,6 +371,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   std::vector<uint16_t> keypad_published_ids_;
   std::map<uint16_t, uint32_t> keypad_published_hashes_;
   bool keypad_entries_published_{false};
+  std::string discovery_device_name_;
   bool discovery_scan_active_{false};
   uint32_t discovery_nuki_id_{0};
   uint32_t keypad_delete_expired_after_{0};

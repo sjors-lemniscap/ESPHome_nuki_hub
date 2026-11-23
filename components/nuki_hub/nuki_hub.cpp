@@ -1501,7 +1501,11 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
   json["command_topic"] = base + "/keypad/actionJson";
   json["payload_on"] = "{\"action\":\"update\",\"codeId\":" + to_string(code_id) + ",\"enabled\":1}";
   json["payload_off"] = "{\"action\":\"update\",\"codeId\":" + to_string(code_id) + ",\"enabled\":0}";
-  json["device"]["identifiers"].to<JsonArray>().add(uid);
+  // With the name: this switch may reach Home Assistant before the device itself does
+  JsonObject device = json["device"].to<JsonObject>();
+  device["identifiers"].to<JsonArray>().add(uid);
+  device["name"] = this->discovery_device_name_;
+  device["manufacturer"] = "Nuki";
   std::string out;
   serializeJson(doc, out);
   this->send_(topic, out.c_str(), out.size(), true);
@@ -1510,6 +1514,7 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
 
 void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &name, const std::string &firmware) {
   this->discovery_nuki_id_ = nuki_id;
+  this->discovery_device_name_ = name.empty() ? std::string("Nuki ") + this->kind() : name;
 #ifdef USE_MQTT
   if (this->discovery_prefix_.empty() || this->discovery_published_ || mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected()) {
@@ -1566,7 +1571,7 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
     this->describe_availability_(json);
     JsonObject device = json["device"].to<JsonObject>();
     device["identifiers"].to<JsonArray>().add(uid);
-    device["name"] = name.empty() ? std::string("Nuki ") + this->kind() : name;
+    device["name"] = this->discovery_device_name_;
     device["manufacturer"] = "Nuki";
     device["model"] = strcmp(this->kind(), "opener") == 0 ? "Opener" : "Smart Lock";
     device["sw_version"] = firmware;
