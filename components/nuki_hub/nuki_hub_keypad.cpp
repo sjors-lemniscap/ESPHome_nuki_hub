@@ -311,7 +311,12 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
       return refuse("noActionSet");
     }
     cmd.action = json["action"].as<const char *>();
+    if (json["codeId"].as<unsigned int>() > 65535) {
+      // Ids have 16 bits: a larger number must not end up as some other entry's id
+      return refuse("noExistingCodeIdSet");
+    }
     cmd.code_id = json["codeId"].as<unsigned int>();
+    cmd.only_if_expired = json["ifExpired"].as<bool>();
 
     if (cmd.action == "check") {
       if (!this->keypad_check_code_) {
@@ -457,6 +462,10 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
     if (existing == nullptr) {
       return refuse("noExistingCodeIdSet");
     }
+    if (cmd.only_if_expired && !this->keypad_entry_expired_(*existing)) {
+      // Extended by a command that came in between
+      return refuse("notExpired");
+    }
 
     if (cmd.action == "update") {
       // Everything the command left out keeps its current value
@@ -519,7 +528,21 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
                 [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
       this->keypad_cache_valid_ = true;
       for (const auto &entry : this->keypad_entries_) {
-        if (entry.code == cmd.add.code && memcmp(entry.name, cmd.add.name, sizeof(entry.name)) == 0) {
+        const bool same_window =
+            entry.timeLimited == cmd.add.timeLimited &&
+            (entry.timeLimited == 0 ||
+             (entry.allowedFromYear == cmd.add.allowedFromYear && entry.allowedFromMonth == cmd.add.allowedFromMonth &&
+              entry.allowedFromDay == cmd.add.allowedFromDay && entry.allowedFromHour == cmd.add.allowedFromHour &&
+              entry.allowedFromMin == cmd.add.allowedFromMin && entry.allowedFromSec == cmd.add.allowedFromSec &&
+              entry.allowedUntilYear == cmd.add.allowedUntilYear &&
+              entry.allowedUntilMonth == cmd.add.allowedUntilMonth && entry.allowedUntilDay == cmd.add.allowedUntilDay &&
+              entry.allowedUntilHour == cmd.add.allowedUntilHour && entry.allowedUntilMin == cmd.add.allowedUntilMin &&
+              entry.allowedUntilSec == cmd.add.allowedUntilSec && entry.allowedWeekdays == cmd.add.allowedWeekdays &&
+              entry.allowedFromTimeHour == cmd.add.allowedFromTimeHour &&
+              entry.allowedFromTimeMin == cmd.add.allowedFromTimeMin &&
+              entry.allowedUntilTimeHour == cmd.add.allowedUntilTimeHour &&
+              entry.allowedUntilTimeMin == cmd.add.allowedUntilTimeMin));
+        if (entry.code == cmd.add.code && memcmp(entry.name, cmd.add.name, sizeof(entry.name)) == 0 && same_window) {
           cmd.code_id = entry.codeId;
           cmd.existed = true;
           return CmdResult::Success;
@@ -736,24 +759,53 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
         command[field.key()] = field.value();
       }
       if (existing == nullptr) {
+        if (!entry["timeLimited"].is<JsonVariantConst>() &&
+            (entry["allowedFrom"].is<JsonVariantConst>() || entry["allowedUntil"].is<JsonVariantConst>())) {
+          command["timeLimited"] = 1;
+        }
         command["action"] = "add";
         adds++;
       } else {
-        // Compare what the wanted entry states with what the keypad has
-        JsonDocument current_doc;
-        JsonObject current = current_doc.to<JsonObject>();
-        keypad_entry_to_json(*existing, current, true);
-        bool differs = false;
-        for (JsonPairConst field : entry.as<JsonObjectConst>()) {
-          const char *key = field.key().c_str();
-          if (strcmp(key, "allowedWeekdays") == 0) {
-            differs = differs || util::weekdays_from_json(field.value()) != existing->allowedWeekdays;
-          } else if (!current[key].isNull()) {
-            // Dates and times of an entry without time limit are not kept by the device
-            const bool time_field = strncmp(key, "allowed", 7) == 0;
-            if (!(time_field && existing->timeLimited == 0 && entry["timeLimited"].as<unsigned int>() != 1)) {
-              differs = differs || util::as_text(field.value()) != util::as_text(current[key]);
-            }
+        // Compare what the wanted entry states with what the keypad has, as values: the same
+        // flag or date can be written in more than one way
+        const bool wants_limit = entry["timeLimited"].is<JsonVariantConst>()
+                                     ? entry["timeLimited"].as<unsigned int>() == 1
+                                     : (entry["allowedFrom"].is<JsonVariantConst>() ||
+                                        entry["allowedUntil"].is<JsonVariantConst>() || existing->timeLimited == 1);
+        // A date without "timeLimited" means a time limit, the command says so explicitly
+        command["timeLimited"] = wants_limit ? 1 : 0;
+        bool differs = (existing->timeLimited == 1) != wants_limit;
+        if (entry["code"].is<JsonVariantConst>()) {
+          differs = differs || entry["code"].as<unsigned int>() != existing->code;
+        }
+        if (entry["enabled"].is<JsonVariantConst>()) {
+          differs = differs || (entry["enabled"].as<unsigned int>() ? 1 : 0) != existing->enabled;
+        }
+        if (wants_limit) {
+          uint16_t dt[6];
+          uint8_t tod[2];
+          const std::string from = util::as_text(entry["allowedFrom"]);
+          if (!from.empty() && util::parse_date_time(from, dt)) {
+            differs = differs || dt[0] != existing->allowedFromYear || dt[1] != existing->allowedFromMonth ||
+                      dt[2] != existing->allowedFromDay || dt[3] != existing->allowedFromHour ||
+                      dt[4] != existing->allowedFromMin || dt[5] != existing->allowedFromSec;
+          }
+          const std::string until = util::as_text(entry["allowedUntil"]);
+          if (!until.empty() && util::parse_date_time(until, dt)) {
+            differs = differs || dt[0] != existing->allowedUntilYear || dt[1] != existing->allowedUntilMonth ||
+                      dt[2] != existing->allowedUntilDay || dt[3] != existing->allowedUntilHour ||
+                      dt[4] != existing->allowedUntilMin || dt[5] != existing->allowedUntilSec;
+          }
+          const std::string from_time = util::as_text(entry["allowedFromTime"]);
+          if (!from_time.empty() && util::parse_time_of_day(from_time, tod)) {
+            differs = differs || tod[0] != existing->allowedFromTimeHour || tod[1] != existing->allowedFromTimeMin;
+          }
+          const std::string until_time = util::as_text(entry["allowedUntilTime"]);
+          if (!until_time.empty() && util::parse_time_of_day(until_time, tod)) {
+            differs = differs || tod[0] != existing->allowedUntilTimeHour || tod[1] != existing->allowedUntilTimeMin;
+          }
+          if (entry["allowedWeekdays"].is<JsonVariantConst>()) {
+            differs = differs || util::weekdays_from_json(entry["allowedWeekdays"]) != existing->allowedWeekdays;
           }
         }
         if (!differs) {
@@ -800,42 +852,51 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
 // Keypad: remove time limited entries that have run out
 // --------------------------------------------------------------------------------------------
 
-void NukiHubComponent::delete_expired_keypad_entries_() {
+bool NukiHubComponent::keypad_entry_expired_(const KeypadEntry &entry) {
 #ifdef USE_TIME
-  if (this->keypad_delete_expired_after_ == 0 || this->clock_ == nullptr || this->keypad_commands_pending_ > 0) {
-    return;
+  if (entry.timeLimited != 1 || entry.allowedUntilYear == 0 || this->clock_ == nullptr) {
+    return false;
   }
   // Compared in the Nuki device's own (local) time, which update_time keeps equal to this clock
   ESPTime now = this->clock_->now();
   if (!now.is_valid()) {
-    return;
+    return false;
   }
   ESPTime limit = ESPTime::from_epoch_local(now.timestamp - this->keypad_delete_expired_after_);
   auto stamp = [](int year, int month, int day, int hour, int minute, int second) {
     return (((((int64_t) year * 100 + month) * 100 + day) * 100 + hour) * 100 + minute) * 100 + second;
   };
-  const int64_t limit_stamp =
-      stamp(limit.year, limit.month, limit.day_of_month, limit.hour, limit.minute, limit.second);
+  return stamp(entry.allowedUntilYear, entry.allowedUntilMonth, entry.allowedUntilDay, entry.allowedUntilHour,
+               entry.allowedUntilMin, entry.allowedUntilSec) <
+         stamp(limit.year, limit.month, limit.day_of_month, limit.hour, limit.minute, limit.second);
+#else
+  return false;
+#endif
+}
 
+void NukiHubComponent::delete_expired_keypad_entries_() {
+#ifdef USE_TIME
+  // Not while anything else is waiting: a command in the queue may be about to extend an entry
+  if (this->keypad_delete_expired_after_ == 0 || this->keypad_commands_pending_ > 0 || !this->queue_.empty() ||
+      (int32_t) (millis() - this->keypad_expiry_not_before_) < 0) {
+    return;
+  }
   std::vector<std::string> commands;
   for (const auto &entry : this->keypad_entries_) {
-    if (entry.timeLimited != 1 || entry.allowedUntilYear == 0) {
-      continue;
-    }
     const std::string name = util::fixed_string(entry.name, sizeof(entry.name));
     if (!this->keypad_delete_expired_prefix_.empty() &&
         name.compare(0, this->keypad_delete_expired_prefix_.size(), this->keypad_delete_expired_prefix_) != 0) {
       continue;
     }
-    const int64_t until = stamp(entry.allowedUntilYear, entry.allowedUntilMonth, entry.allowedUntilDay,
-                                entry.allowedUntilHour, entry.allowedUntilMin, entry.allowedUntilSec);
-    if (until >= limit_stamp || commands.size() >= MAX_BATCH) {
+    if (!this->keypad_entry_expired_(entry) || commands.size() >= MAX_BATCH) {
       continue;
     }
     ESP_LOGI(TAG, "Keypad entry %u '%s' ran out, deleting it", entry.codeId, name.c_str());
     JsonDocument command;
     command["action"] = "delete";
     command["codeId"] = entry.codeId;
+    // Looked at again when the delete is about to happen
+    command["ifExpired"] = true;
     std::string text;
     serializeJson(command, text);
     commands.push_back(std::move(text));
@@ -843,6 +904,8 @@ void NukiHubComponent::delete_expired_keypad_entries_() {
   if (commands.empty()) {
     return;
   }
+  // A delete that keeps failing must not be tried again with every read of the list
+  this->keypad_expiry_not_before_ = millis() + 600000;
   auto batch = this->start_keypad_batch_("", "/keypad/expiredResult", commands, millis());
   if (batch) {
     batch->summary["reason"] = "expired";

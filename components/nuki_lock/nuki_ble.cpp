@@ -1557,7 +1557,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     case Command::AuthorizationEntry : {
       print_buffer((uint8_t*)data, dataLen, false, "authorizationEntry", this->debug_nuki_hex_data_);
       AuthorizationEntry authEntry;
-      memcpy(&authEntry, data, dataLen);
+      memcpy(&authEntry, data, std::min<size_t>(dataLen, sizeof(authEntry)));
       this->list_of_authorization_entries_.push_back(authEntry);
       if (this->debug_nuki_readable_data_) {
         log_authorization_entry(authEntry, true);
@@ -1675,7 +1675,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::FingerprintEntry : {
       FingerprintEntry fingerprintEntry;
-      memcpy(&fingerprintEntry, data, dataLen);
+      memcpy(&fingerprintEntry, data, std::min<size_t>(dataLen, sizeof(fingerprintEntry)));
       this->list_of_fingerprint_entries_.push_back(fingerprintEntry);
 
       print_buffer((uint8_t*)data, dataLen, false, "fingerprintEntry", this->debug_nuki_hex_data_);
@@ -1686,7 +1686,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::KeypadCode : {
       KeypadEntry keypadEntry;
-      memcpy(&keypadEntry, data, dataLen);
+      memcpy(&keypadEntry, data, std::min<size_t>(dataLen, sizeof(keypadEntry)));
       this->list_of_key_pad_entries_.push_back(keypadEntry);
       this->nr_of_received_keypad_codes_++;
 
@@ -1703,6 +1703,17 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     default:
       ESP_LOGE(TAG, "UNKNOWN RETURN COMMAND: %04x", (unsigned int)returnCode);
   }
+}
+
+void NukiBle::abort_command() {
+  this->nuki_command_state_ = CommandState::Idle;
+  this->last_msg_code_received_ = Command::Empty;
+  this->clear_seen_responses_();
+  this->keypad_retrieval_state_ = KeypadRetrievalState::Idle;
+  this->keypad_request_sent_ = false;
+  this->auth_entries_retrieval_state_ = EntryRetrievalState::Idle;
+  this->auth_entries_request_sent_ = false;
+  this->fingerprint_request_started_ = false;
 }
 
 void NukiBle::set_event_handler(SmartlockEventHandler* handler) {

@@ -934,12 +934,14 @@ CmdResult NukiHubComponent::check_attempt_deadline_(uint32_t now) {
   if (!this->attempt_connected_ && elapsed > CONNECT_DEADLINE_MS) {
     ESP_LOGW(TAG, "%s: Send encr msg failed due to unable to connect", this->kind());
     ble->disconnect();
+    ble->abort_command();
     return CmdResult::TimeOut;
   }
   if (elapsed > ATTEMPT_DEADLINE_MS) {
     ESP_LOGW(TAG, "%s: '%s' did not finish within %u seconds", this->kind(), this->op_.name,
              (unsigned) (ATTEMPT_DEADLINE_MS / 1000));
     ble->disconnect();
+    ble->abort_command();
     return CmdResult::TimeOut;
   }
   return CmdResult::Working;
@@ -978,9 +980,23 @@ void NukiHubComponent::set_pairing_mode(bool enabled) {
 }
 
 void NukiHubComponent::unpair() {
+  this->ble()->disconnect();
+  this->ble()->abort_command();
   this->ble()->unpair_nuki();
-  this->queue_.clear();
+  // Whatever was running or waiting gets its answer, so counters and batches come out even
+  std::deque<Operation> dropped;
+  dropped.swap(this->queue_);
+  if (this->op_active_ && this->op_.done) {
+    dropped.push_front(std::move(this->op_));
+  }
+  this->op_ = Operation{};
   this->op_active_ = false;
+  this->op_retry_pending_ = false;
+  for (auto &op : dropped) {
+    if (op.done) {
+      op.done(CmdResult::NotPaired);
+    }
+  }
   this->pin_valid_ = false;
   this->pin_checked_ = false;
   this->set_available_(false);
@@ -1599,7 +1615,11 @@ static bool digits(const std::string &text, size_t pos, size_t count, unsigned *
 
 bool parse_date_time(const std::string &text, uint16_t *out) {
   unsigned v[6];
-  if (text.size() != 19 || !digits(text, 0, 4, &v[0]) || !digits(text, 5, 2, &v[1]) || !digits(text, 8, 2, &v[2]) ||
+  if (text.size() != 19 || text[4] != '-' || text[7] != '-' || (text[10] != ' ' && text[10] != 'T') ||
+      text[13] != ':' || text[16] != ':') {
+    return false;
+  }
+  if (!digits(text, 0, 4, &v[0]) || !digits(text, 5, 2, &v[1]) || !digits(text, 8, 2, &v[2]) ||
       !digits(text, 11, 2, &v[3]) || !digits(text, 14, 2, &v[4]) || !digits(text, 17, 2, &v[5])) {
     return false;
   }
@@ -1615,7 +1635,7 @@ bool parse_date_time(const std::string &text, uint16_t *out) {
 
 bool parse_time_of_day(const std::string &text, uint8_t *out) {
   unsigned hour, minute;
-  if (text.size() != 5 || !digits(text, 0, 2, &hour) || !digits(text, 3, 2, &minute) || hour > 23 || minute > 59) {
+  if (text.size() != 5 || text[2] != ':' || !digits(text, 0, 2, &hour) || !digits(text, 3, 2, &minute) || hour > 23 || minute > 59) {
     return false;
   }
   out[0] = hour;

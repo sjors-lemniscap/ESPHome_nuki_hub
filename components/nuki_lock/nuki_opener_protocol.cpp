@@ -435,6 +435,14 @@ void NukiOpener::handle_return_message(Command returnCode, unsigned char *data, 
   this->last_msg_code_received_ = returnCode;
 }
 
+void NukiOpener::abort_command() {
+  NukiBle::abort_command();
+  this->config_write_pending_ = false;
+  this->advanced_config_write_pending_ = false;
+  this->list_request_started_ = false;
+  this->list_waiting_ = false;
+}
+
 void NukiOpener::log_error_code(uint8_t error_code) {
   const char *name = "unknown";
   switch (error_code) {

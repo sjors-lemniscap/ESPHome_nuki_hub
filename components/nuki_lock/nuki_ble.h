@@ -437,6 +437,13 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * @param pin_code the security PIN, 0 if none
      * @return true if the credentials were stored
      */
+    /**
+     * @brief Forgets the command in flight. For a caller that stops stepping a command before
+     * it reported a result (its own deadline passed, the pairing was removed): without this the
+     * next command would continue where the abandoned one stood.
+     */
+    virtual void abort_command();
+
     /// The error code of the last error report of the device (see the ErrorCode enums)
     uint8_t get_last_error_code() const { return this->error_code_; }
     void set_last_error_code(uint8_t code) { this->error_code_ = code; }

@@ -68,6 +68,8 @@ struct KeypadCommand {
   uint32_t timeout_ms{0};
   /// An add that found its entry on the keypad already
   bool existed{false};
+  /// A delete that only happens if the entry has run out by the time it is executed
+  bool only_if_expired{false};
   std::string action;
   uint16_t code_id{0};
   nuki_lock::NewKeypadEntry add{};
@@ -268,6 +270,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
                                                    const std::vector<std::string> &commands, uint32_t received_at);
   void finish_keypad_batch_(KeypadBatch &batch);
   void delete_expired_keypad_entries_();
+  bool keypad_entry_expired_(const nuki_lock::KeypadEntry &entry);
   CmdResult keypad_command_step_(KeypadCommand &cmd);
   void keypad_command_done_(KeypadCommand &cmd, CmdResult result);
   Operation make_keypad_operation_();
@@ -319,6 +322,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_check_code_{false};
   uint32_t keypad_delete_expired_after_{0};
   std::string keypad_delete_expired_prefix_;
+  uint32_t keypad_expiry_not_before_{0};
   uint16_t max_keypad_entries_{100};
   uint16_t max_auth_entries_{20};
   uint16_t max_log_entries_{5};

@@ -561,6 +561,7 @@ class NukiLock : public NukiBle {
     const ErrorCode get_last_error() const;
 
     virtual void log_error_code(uint8_t error_code) override;
+    void abort_command() override;
 
     // How long a previously-fetched Config/AdvancedConfig may be reused by
     // begin_config_write()/begin_advanced_config_write() instead of fetching a fresh one

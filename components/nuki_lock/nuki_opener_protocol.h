@@ -68,6 +68,7 @@ class NukiOpener : public NukiBle {
     uint8_t get_last_error() const { return this->error_code_; }
 
     void log_error_code(uint8_t error_code) override;
+    void abort_command() override;
 
   protected:
     void handle_return_message(Command returnCode, unsigned char *data, uint16_t dataLen) override;

@@ -889,8 +889,12 @@ void NukiHubLock::queue_log_range(uint32_t from, uint32_t to, const std::string 
   const uint32_t received_at = millis();
   Operation op;
   op.name = "read log range";
-  this->list_settling_ = false;
-  op.step = [this, from, to] {
+  auto started = std::make_shared<bool>(false);
+  op.step = [this, from, to, started] {
+    if (!*started) {
+      *started = true;
+      this->list_settling_ = false;
+    }
     CmdResult result = this->list_settling_
                            ? CmdResult::Success
                            : this->nuki_lock_.retrieve_log_entries(from - 1, to - from + 2, 0, false);
