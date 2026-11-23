@@ -153,6 +153,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_last_user_text_sensor(text_sensor::TextSensor *s) { this->last_user_text_sensor_ = s; }
 #endif
   void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
+  void set_fast_connection(bool enabled) { this->fast_connection_ = enabled; }
   void set_bluetooth_watchdog(uint32_t seconds) { this->bluetooth_watchdog_ = seconds; }
   void set_invalid_code_alert(uint8_t count, uint32_t window_seconds) {
     this->invalid_code_alert_count_ = count;
@@ -352,6 +353,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
 #endif
   ESPPreferenceObject log_marker_pref_;
   uint32_t ble_disconnect_timeout_{2000};
+  bool fast_connection_{true};
+  // Runs the main loop without pause while a command is on its way
+  HighFrequencyLoopRequester high_frequency_;
   uint32_t bluetooth_watchdog_{0};
   uint32_t last_success_{0};
   uint8_t invalid_code_alert_count_{0};

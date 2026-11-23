@@ -1397,6 +1397,12 @@ bool NukiBle::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gatt
     case ESP_GATTC_OPEN_EVT: {
       if (param->open.status == ESP_GATT_OK || param->open.status == ESP_GATT_ALREADY_OPEN) {
         this->extend_disconnect_timeout();
+        if (this->fast_connection_) {
+          // A command is a handful of short messages back and forth, each waiting for the next
+          // connection event: with the default interval (30-50 ms) that wait is most of the
+          // time a command takes. The connection only lasts a few seconds.
+          this->update_conn_params_(0x06, 0x0C, 0, 400, "fast");
+        }
       }
       break;
     }

@@ -119,6 +119,7 @@ void NukiHubComponent::setup() {
   ble->set_event_handler(this);
   ble->initialize();
   ble->set_disconnect_timeout(this->ble_disconnect_timeout_);
+  ble->set_fast_connection(this->fast_connection_);
   ble->set_general_timeout(this->ble_general_timeout_);
   ble->set_command_timeout(this->ble_command_timeout_);
 
@@ -813,7 +814,7 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
 
   this->op_active_ = false;
   this->op_retry_pending_ = false;
-  this->next_op_time_ = millis() + 20;
+  this->next_op_time_ = millis() + 5;
   std::function<void(CmdResult)> done = std::move(this->op_.done);
   this->op_ = Operation{};
   if (done) {
@@ -828,7 +829,14 @@ void NukiHubComponent::loop() {
 
   const uint32_t now = millis();
   const bool busy = this->op_active_ && !this->op_retry_pending_;
-  if (now - this->last_loop_ < (busy ? 20 : 100)) {
+  // Every step of a command waits for an answer of the device. Looking for it often keeps
+  // that wait short, so while a command runs the loop is asked to run without its usual pause.
+  if (busy || !this->queue_.empty()) {
+    this->high_frequency_.start();
+  } else {
+    this->high_frequency_.stop();
+  }
+  if (now - this->last_loop_ < (busy ? 2 : 100)) {
     return;
   }
   this->last_loop_ = now;

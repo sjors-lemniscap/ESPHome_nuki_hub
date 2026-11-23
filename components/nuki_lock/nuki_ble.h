@@ -110,6 +110,12 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * @param timeoutMs
      */
     void set_action_timeout(uint32_t timeoutMs) { this->action_timeout_duration_ = timeoutMs; }
+
+    /**
+     * @brief Ask for a short connection interval (7.5-15 ms) once connected, which makes
+     * commands faster at the price of more radio time while the connection is open.
+     */
+    void set_fast_connection(bool enable) { this->fast_connection_ = enable; }
     
     /**
      * @brief Set the BLE Connect Timeout in seconds.
@@ -505,6 +511,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     uint32_t general_timeout_duration_ = 10000;
     uint32_t command_timeout_duration_ = 3000;
     uint32_t action_timeout_duration_ = 15000;
+    bool fast_connection_ = false;
     // Kept (and still settable) for API compatibility with nuki_lock.cpp's setup(); no
     // longer consumed internally - BLEClientBase::connect() is a single non-blocking
     // attempt per call, and the existing execute_action()-driven retry-via-repeated-calls
