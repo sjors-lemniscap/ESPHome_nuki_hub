@@ -150,6 +150,29 @@ void NukiHubLock::publish_state_() {
 
 void NukiHubLock::publish_unavailable() { this->state_known_ = false; }
 
+std::vector<NukiHubComponent::DiscoverySetting> NukiHubLock::discovery_settings() const {
+  return {
+      {"ledEnabled", "LED enabled", false, 0, 0},
+      {"buttonEnabled", "Button enabled", false, 0, 0},
+      {"autoUnlatch", "Auto unlatch", false, 0, 0},
+      {"singleLock", "Single lock", false, 0, 0},
+      {"ledBrightness", "LED brightness", false, 0, 5},
+      {"autoLockEnabled", "Auto lock", true, 0, 0},
+      {"immediateAutoLockEnabled", "Immediate auto lock", true, 0, 0},
+      {"nightModeEnabled", "Night mode", true, 0, 0},
+      {"autoLockTimeOut", "Auto lock timeout", true, 30, 1800},
+      {"unlatchDuration", "Unlatch duration", true, 1, 30},
+      {"fobAction1", "Fob action 1", false, 0, 0, names_of(FOB_ACTIONS)},
+      {"fobAction2", "Fob action 2", false, 0, 0, names_of(FOB_ACTIONS)},
+      {"fobAction3", "Fob action 3", false, 0, 0, names_of(FOB_ACTIONS)},
+      {"advertisingMode", "Advertising mode", false, 0, 0, names_of(ADVERTISING_MODES)},
+      {"singleButtonPressAction", "Single button press", true, 0, 0, names_of(BUTTON_PRESS_ACTIONS)},
+      {"doubleButtonPressAction", "Double button press", true, 0, 0, names_of(BUTTON_PRESS_ACTIONS)},
+      {"batteryType", "Battery type", true, 0, 0, names_of(BATTERY_TYPES)},
+      {"motorSpeed", "Motor speed", true, 0, 0, names_of(MOTOR_SPEEDS)},
+  };
+}
+
 std::string NukiHubLock::state_text() const {
   return this->state_known_ ? text_of(lock_state_to_string, this->state_.lockState) : "undefined";
 }

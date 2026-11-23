@@ -672,6 +672,8 @@ void NukiHubComponent::on_mqtt_connected_() {
 
   this->log_marker_deadline_ = millis() + 3000;
   this->discovery_published_ = false;
+  this->discovery_pending_ = false;
+  this->discovery_cursor_ = 0;
   this->keypad_published_hashes_.clear();
   this->auth_switches_.hashes.clear();
   this->time_control_switches_.hashes.clear();
@@ -1117,6 +1119,9 @@ void NukiHubComponent::loop() {
   }
 #endif
   this->flush_outbox_();
+  if (this->discovery_pending_ && now - this->discovery_at_ >= 150) {
+    this->publish_discovery_(this->discovery_nuki_id_, this->discovery_device_name_, this->discovery_firmware_);
+  }
   if (this->keypad_entries_more_ && now - this->keypad_entries_at_ >= 150) {
     this->publish_keypad_entries_();
   }
@@ -1597,7 +1602,11 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
 }
 
 void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &name, const std::string &firmware) {
+  if (nuki_id != this->discovery_nuki_id_ || firmware != this->discovery_firmware_) {
+    this->discovery_cursor_ = 0;
+  }
   this->discovery_nuki_id_ = nuki_id;
+  this->discovery_firmware_ = firmware;
   this->discovery_device_name_ = name.empty() ? std::string("Nuki ") + this->kind() : name;
 #ifdef USE_MQTT
   if (this->discovery_prefix_.empty() || this->discovery_published_ || mqtt::global_mqtt_client == nullptr ||
@@ -1664,12 +1673,25 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
       }
     });
   }
-  this->discovery_published_ = true;
   char uid[24];
   snprintf(uid, sizeof(uid), "nuki_%08" PRIx32, nuki_id);
   const std::string base = this->topic_prefix_ + "/" + this->kind();
 
+  // A few entities per call, with memory to spare: loop() comes back for the rest. On a
+  // board without PSRAM forty of these at once are more than may wait for the broker.
+  uint16_t index = 0;
+  uint8_t budget = 6;
+  bool more = false;
   auto announce = [&](const char *component, const char *object, const std::function<void(JsonObject)> &fill) {
+    if (index++ < this->discovery_cursor_) {
+      return;
+    }
+    if (more || budget == 0 || this->outbox_.size() >= 16 || heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40000) {
+      more = true;
+      return;
+    }
+    budget--;
+    this->discovery_cursor_++;
     JsonDocument doc(json_memory());
     JsonObject json = doc.to<JsonObject>();
     json["unique_id"] = std::string(uid) + "_" + object;
@@ -1772,6 +1794,12 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
       }
     });
   }
+  this->discovery_at_ = millis();
+  this->discovery_pending_ = more;
+  if (more) {
+    return;
+  }
+  this->discovery_published_ = true;
   ESP_LOGI(TAG, "Announced the %s to Home Assistant on %s", this->kind(), this->discovery_prefix_.c_str());
 #endif
 }

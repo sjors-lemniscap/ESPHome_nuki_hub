@@ -1,7 +1,7 @@
 # Writing a client
 
 For software that manages door codes through these topics, such as a booking system. The
-[topic reference](nuki_hub.md#topics) lists everything; this is about how to use it well.
+[topic reference](topics.md#topics) lists everything; this is about how to use it well.
 A client written for Nuki Hub works unchanged. What is described here makes it simpler and
 faster, and can be adopted step by step: every room that runs Nuki Hub simply does not
 answer on the additional topics.

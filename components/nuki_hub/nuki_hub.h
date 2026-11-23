@@ -397,6 +397,10 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
     this->publish_list_switches_(this->time_control_switches_, entries);
   }
   std::string discovery_device_name_;
+  std::string discovery_firmware_;
+  uint16_t discovery_cursor_{0};
+  bool discovery_pending_{false};
+  uint32_t discovery_at_{0};
   bool discovery_scan_active_{false};
   uint32_t discovery_nuki_id_{0};
   uint32_t keypad_delete_expired_after_{0};

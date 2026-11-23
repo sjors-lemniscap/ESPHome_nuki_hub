@@ -176,14 +176,6 @@ void NukiHubOpener::describe_for_discovery(JsonObject lock) {
   lock["payload_open"] = "electricStrikeActuation";
 }
 
-template<size_t N> static std::vector<const char *> names_of(const Name (&table)[N]) {
-  std::vector<const char *> names;
-  for (const auto &entry : table) {
-    names.push_back(entry.text);
-  }
-  return names;
-}
-
 std::vector<NukiHubComponent::DiscoverySetting> NukiHubOpener::discovery_settings() const {
   return {
       {"ledFlashEnabled", "LED enabled", false, 0, 0},

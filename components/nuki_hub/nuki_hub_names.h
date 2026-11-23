@@ -4,6 +4,8 @@
 #include <cstring>
 #include <string>
 
+#include <vector>
+
 namespace esphome::nuki_hub {
 
 /// A value of the Nuki protocol and the text Nuki Hub uses for it
@@ -46,5 +48,14 @@ template<size_t N> bool action_of(const Name (&table)[N], const std::string &tex
 static const Name ADVERTISING_MODES[] = {{0, "Automatic"}, {1, "Normal"}, {2, "Slow"}, {3, "Slowest"}};
 static const Name BATTERY_TYPES[] = {{0, "Alkali"}, {1, "Accumulators"}, {2, "Lithium"}, {3, "No Warnings"}};
 static const Name KEYPAD_TRIGGERS[] = {{0, "arrowkey"}, {1, "code"}, {2, "fingerprint"}};
+
+/// The texts of a table, as the choices of a select
+template<size_t N> std::vector<const char *> names_of(const Name (&table)[N]) {
+  std::vector<const char *> names;
+  for (const auto &entry : table) {
+    names.push_back(entry.text);
+  }
+  return names;
+}
 
 }  // namespace esphome::nuki_hub
