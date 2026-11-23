@@ -10,27 +10,28 @@ these topics.
 
 | Operation | average | median | 95% | slowest |
 | --- | --- | --- | --- | --- |
-| Keypad add | 384 ms | 347 ms | 688 ms | 688 ms |
-| Keypad update | 386 ms | 401 ms | 594 ms | 594 ms |
-| Keypad delete | 407 ms | 374 ms | 649 ms | 649 ms |
-| State read, connection open | 292 ms | 292 ms | 497 ms | 497 ms |
-| Keypad list read, new connection | 1510 ms | 1110 ms | 3770 ms | 3770 ms |
+| Keypad add | 285 ms | 249 ms | 515 ms | 515 ms |
+| Keypad update | 220 ms | 214 ms | 253 ms | 253 ms |
+| Keypad delete | 312 ms | 289 ms | 622 ms | 622 ms |
+| State read, connection open | 269 ms | 308 ms | 514 ms | 514 ms |
+| Keypad list read, new connection | 1653 ms | 1586 ms | 3024 ms | 3024 ms |
 
-20 commands each, 10 for the reads.
+20 commands each, 10 for the reads, with `keypad_fast_list: true`.
 
 ## Many commands
 
 | Operation | total | per command |
 | --- | --- | --- |
-| 20 adds as one batch | 4.6 s | 232 ms |
-| 20 deletes as one batch | 4.6 s | 229 ms |
-| Sync that adds 20 entries (reads the list first) | 5.0 s | 251 ms |
-| Sync with nothing to do (reads the list) | 1.2 s | |
-| Sync that deletes 20 entries | 6.6 s | 330 ms |
+| 20 adds as one batch | 4.4 s | 219 ms |
+| 20 deletes as one batch | 4.3 s | 215 ms |
+| Sync that adds 20 entries (reads the list first) | 4.9 s | 245 ms |
+| Sync with nothing to do (reads the list) | 1.1 s | |
+| Sync that deletes 20 entries | 5.4 s | 271 ms |
 
 A batch saves the trip over Wi-Fi and the broker for every command but the first. Wi-Fi
 power saving, which the ESP32 needs while Bluetooth is on, delays incoming packets by up to a
-beacon interval (about 100 ms), and that is most of the difference to a single command.
+beacon interval (about 100 ms). Times of single commands therefore vary from run to run with
+the Wi-Fi link more than with anything in the firmware.
 
 ## What the tuning did
 
@@ -38,6 +39,7 @@ beacon interval (about 100 ms), and that is most of the difference to a single c
 | --- | --- | --- |
 | Stepping a command every 20 ms, default connection interval | 458-475 ms | 6.1 s |
 | Stepping continuously, connection interval 7.5-15 ms (`fast_connection`, the default) | 384-407 ms | 4.6 s |
+| The same with `keypad_fast_list: true` | 220-312 ms | 4.7 s |
 
 ## Under load
 
@@ -45,6 +47,7 @@ beacon interval (about 100 ms), and that is most of the difference to a single c
 | --- | --- | --- | --- | --- |
 | Harness with activity log checks and a 20 code burst | 72 | 0 | 0 | 0 |
 | The same while another device held the Opener's connection for 20 s | 72 | 0 | 0 | 0 |
+| Both again on the final build: average 298 ms per command, 95% below 517 ms | 144 | 0 | 0 | 0 |
 | One hour, a 70 command burst every five minutes | 732 | 0 | 0 | 0 |
 
 In the one hour run a burst of 20 adds, 20 updates, 10 commands at once and 20 deletes took
