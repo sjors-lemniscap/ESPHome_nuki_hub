@@ -84,6 +84,7 @@ void NukiHubComponent::publish_keypad_() {
   }
   this->publish_json_("/keypad/json", doc);
   this->publish_int_("/keypad/count", this->keypad_entries_.size());
+  this->update_entities_();
 }
 
 void NukiHubComponent::handle_keypad_action_(const std::string &payload) {

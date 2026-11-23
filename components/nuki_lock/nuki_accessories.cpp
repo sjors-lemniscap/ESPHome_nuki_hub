@@ -316,9 +316,17 @@ CmdResult NukiBle::retrieve_fingerprint_entries() {
   action.cmdType = CommandType::CommandWithChallengeAndPin;
   action.command = Command::RequestFingerprintEntries;
 
-  this->list_of_fingerprint_entries_.clear();
+  // Called once per tick until done: clear the list when the request starts only
+  if (!this->fingerprint_request_started_) {
+    this->list_of_fingerprint_entries_.clear();
+    this->fingerprint_request_started_ = true;
+  }
 
-  return this->execute_action(action);
+  CmdResult result = this->execute_action(action);
+  if (result != CmdResult::Working) {
+    this->fingerprint_request_started_ = false;
+  }
+  return result;
 }
 
 CmdResult NukiLock::get_accessory_info(const uint8_t accessoryType) {

@@ -32,6 +32,9 @@ class NukiOpener : public NukiBle {
     CmdResult lock_action(const LockAction lock_action, const uint32_t nukiAppId = 1, const uint8_t flags = 0,
                           const char *nameSuffix = nullptr, const uint8_t nameSuffixLen = 0);
 
+    /// Switches continuous mode. `timeoutMinutes` 0 leaves it on until it is switched off.
+    CmdResult continuous_mode(bool enabled, uint8_t timeoutMinutes = 0);
+
     CmdResult request_opener_state(OpenerState *state);
     void retrieve_opener_state(OpenerState *state);
     /// The state the Opener pushed on its own since clear_pushed_opener_state(), once

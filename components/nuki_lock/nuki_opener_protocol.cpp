@@ -68,6 +68,18 @@ CmdResult NukiOpener::lock_action(const LockAction lock_action, const uint32_t n
   return this->execute_action(action);
 }
 
+CmdResult NukiOpener::continuous_mode(bool enabled, uint8_t timeoutMinutes) {
+  NukiAction action{};
+  ContinuousModeAction continuous_mode_action{};
+  continuous_mode_action.enabled = enabled ? 1 : 0;
+  continuous_mode_action.timeout = timeoutMinutes;
+  action.cmdType = CommandType::CommandWithChallengeAndPin;
+  action.command = Command::ContinuousModeAction;
+  memcpy(action.payload, &continuous_mode_action, sizeof(ContinuousModeAction));
+  action.payloadLen = sizeof(ContinuousModeAction);
+  return this->execute_action(action);
+}
+
 CmdResult NukiOpener::request_opener_state(OpenerState *state) {
   NukiAction action{};
   uint16_t payload = (uint16_t) Command::KeyturnerStates;

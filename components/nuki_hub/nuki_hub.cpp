@@ -141,6 +141,7 @@ void NukiHubComponent::setup() {
   }
 
   this->setup_device();
+  this->add_on_state_callback([this] { this->update_entities_(); });
 
   if (ble->is_paired_with_lock()) {
     ESP_LOGI(TAG, "Paired with the Nuki %s", this->kind());
@@ -308,6 +309,7 @@ void NukiHubComponent::on_mqtt_connected_() {
       // The plain action name of Nuki Hub, or {"action": "...", "requestId": "..."}
       std::string action = payload;
       std::string request_id;
+      uint8_t timeout = 0;
       if (payload[0] == '{') {
         JsonDocument json;
         if (deserializeJson(json, payload) || !json["action"].is<const char *>()) {
@@ -316,6 +318,7 @@ void NukiHubComponent::on_mqtt_connected_() {
         }
         action = json["action"].as<const char *>();
         request_id = util::as_text(json["requestId"]);
+        timeout = json["timeout"].as<unsigned int>();
       }
       if (!this->is_paired()) {
         this->publish_("/action", "denied");
@@ -323,7 +326,7 @@ void NukiHubComponent::on_mqtt_connected_() {
         this->publish_result_("/actionResult", request_id, action, "notPaired", false, millis());
         return;
       }
-      if (this->queue_action(action, request_id)) {
+      if (this->queue_action(action, request_id, timeout)) {
         this->publish_("/action", "ack");
       } else {
         this->publish_("/action", "unknown_action");
@@ -344,12 +347,41 @@ void NukiHubComponent::on_mqtt_connected_() {
     query("/query/config", &this->want_config_);
     query("/query/battery", &this->want_battery_);
     query("/query/keypad", &this->want_keypad_);
+    query("/query/authorizations", &this->want_auth_);
+    query("/query/timecontrol", &this->want_time_control_);
+    query("/query/fingerprints", &this->want_fingerprints_);
 
     this->subscribe_("/keypad/actionJson", [this](const std::string &payload) {
       if (is_placeholder(payload)) {
         return;
       }
       this->handle_keypad_action_(payload);
+    });
+    // {"from": 100, "to": 120, "requestId": "..."}: log entries by index, on logRange
+    this->subscribe_("/query/logRange", [this](const std::string &payload) {
+      if (is_placeholder(payload) || payload == "0") {
+        return;
+      }
+      const std::string request_id = util::request_id(payload);
+      JsonDocument json;
+      const bool valid = !deserializeJson(json, payload) && json["from"].is<unsigned int>();
+      const uint32_t from = valid ? json["from"].as<unsigned int>() : 0;
+      const uint32_t to = valid && json["to"].is<unsigned int>() ? json["to"].as<unsigned int>() : from;
+      const char *refusal = nullptr;
+      if (!valid || from == 0 || to < from) {
+        refusal = "invalidRange";
+      } else if (to - from >= 100) {
+        refusal = "rangeTooLarge";
+      } else if (!this->is_paired()) {
+        refusal = "notPaired";
+      } else if (!this->pin_valid_) {
+        refusal = "noValidPinSet";
+      }
+      if (refusal != nullptr) {
+        this->publish_result_("/logRange", request_id, "", refusal, false, millis());
+        return;
+      }
+      this->queue_log_range(from, to, request_id);
     });
     this->subscribe_("/keypad/batchJson", [this](const std::string &payload) {
       if (is_placeholder(payload)) {
@@ -418,6 +450,7 @@ void NukiHubComponent::on_mqtt_connected_() {
   }
 
   this->log_marker_deadline_ = millis() + 3000;
+  this->discovery_published_ = false;
 
   // What happened while the broker was away was not published: read everything again
   if (this->mqtt_connects_++ > 0 && this->is_paired()) {
@@ -703,6 +736,12 @@ bool NukiHubComponent::start_next_operation_() {
       return false;
     }
     this->op_ = this->make_time_control_operation();
+  } else if (this->want_fingerprints_) {
+    this->want_fingerprints_ = false;
+    if (!this->pin_valid_) {
+      return false;
+    }
+    this->op_ = this->make_fingerprint_operation_();
   } else {
     return false;
   }
@@ -984,6 +1023,192 @@ Operation NukiHubComponent::make_time_operation_() {
   };
 #endif
   return op;
+}
+
+// --------------------------------------------------------------------------------------------
+// Fingerprints (Keypad 2)
+// --------------------------------------------------------------------------------------------
+
+Operation NukiHubComponent::make_fingerprint_operation_() {
+  Operation op;
+  op.name = "read fingerprints";
+  this->fingerprint_settling_ = false;
+  // The device sends the entries without announcing their number: the list is complete once
+  // nothing came for a second
+  op.step = [this] {
+    if (!this->fingerprint_settling_) {
+      CmdResult result = this->ble()->retrieve_fingerprint_entries();
+      if (result != CmdResult::Success) {
+        return result;
+      }
+      this->fingerprint_settling_ = true;
+      this->fingerprint_last_size_ = this->ble()->get_fingerprint_entry_list_size();
+      this->fingerprint_last_change_ = millis();
+      return CmdResult::Working;
+    }
+    const size_t size = this->ble()->get_fingerprint_entry_list_size();
+    if (size != this->fingerprint_last_size_) {
+      this->fingerprint_last_size_ = size;
+      this->fingerprint_last_change_ = millis();
+    }
+    return millis() - this->fingerprint_last_change_ < 1000 ? CmdResult::Working : CmdResult::Success;
+  };
+  op.done = [this](CmdResult result) {
+    this->fingerprint_settling_ = false;
+    if (result != CmdResult::Success) {
+      return;
+    }
+    std::vector<FingerprintEntry> entries;
+    this->ble()->get_fingerprint_entries(&entries);
+    JsonDocument doc;
+    JsonArray list = doc.to<JsonArray>();
+    for (const auto &entry : entries) {
+      JsonObject json = list.add<JsonObject>();
+      char id[sizeof(entry.fingerprintId) * 2 + 1];
+      for (size_t i = 0; i < sizeof(entry.fingerprintId); i++) {
+        snprintf(&id[i * 2], 3, "%02x", entry.fingerprintId[i]);
+      }
+      json["fingerprintId"] = id;
+      json["keypadCodeId"] = entry.keypadCodeId;
+      json["name"] = util::fixed_string(entry.name, sizeof(entry.name));
+    }
+    this->publish_json_("/fingerprint/json", doc);
+  };
+  return op;
+}
+
+// --------------------------------------------------------------------------------------------
+// Entities of the ESPHome API and Home Assistant discovery over MQTT
+// --------------------------------------------------------------------------------------------
+
+void NukiHubComponent::update_entities_() {
+#ifdef USE_BINARY_SENSOR
+  if (this->available_binary_sensor_ != nullptr) {
+    this->available_binary_sensor_->publish_state(this->available_);
+  }
+  if (this->available_ && this->battery_critical_binary_sensor_ != nullptr) {
+    this->battery_critical_binary_sensor_->publish_state(this->battery_critical());
+  }
+  if (this->available_ && this->keypad_battery_critical_binary_sensor_ != nullptr) {
+    this->keypad_battery_critical_binary_sensor_->publish_state(this->keypad_battery_critical());
+  }
+#endif
+#ifdef USE_SENSOR
+  if (this->rssi_sensor_ != nullptr && this->is_paired()) {
+    this->rssi_sensor_->publish_state(this->ble()->get_rssi());
+  }
+  if (this->keypad_entries_sensor_ != nullptr && this->keypad_cache_valid_) {
+    this->keypad_entries_sensor_->publish_state(this->keypad_entries_.size());
+  }
+#endif
+#ifdef USE_TEXT_SENSOR
+  if (this->state_text_sensor_ != nullptr && this->available_) {
+    const std::string text = this->state_text();
+    if (this->state_text_sensor_->state != text) {
+      this->state_text_sensor_->publish_state(text);
+    }
+  }
+  if (this->last_user_text_sensor_ != nullptr && this->last_auth_id_ != 0xFFFFFFFF &&
+      this->last_user_text_sensor_->state != this->last_auth_name_) {
+    this->last_user_text_sensor_->publish_state(this->last_auth_name_);
+  }
+#endif
+}
+
+void NukiHubComponent::set_ring_entity_(bool ringing) {
+#ifdef USE_BINARY_SENSOR
+  if (this->ring_binary_sensor_ != nullptr) {
+    this->ring_binary_sensor_->publish_state(ringing);
+  }
+#endif
+}
+
+void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &name, const std::string &firmware) {
+#ifdef USE_MQTT
+  if (this->discovery_prefix_.empty() || this->discovery_published_ || mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected()) {
+    return;
+  }
+  this->discovery_published_ = true;
+  char uid[24];
+  snprintf(uid, sizeof(uid), "nuki_%08" PRIx32, nuki_id);
+  const std::string base = this->topic_prefix_ + "/" + this->kind();
+
+  auto announce = [&](const char *component, const char *object, const std::function<void(JsonObject)> &fill) {
+    JsonDocument doc;
+    JsonObject json = doc.to<JsonObject>();
+    json["unique_id"] = std::string(uid) + "_" + object;
+    json["object_id"] = std::string(uid) + "_" + object;
+    json["availability_topic"] = base + "/availability";
+    JsonObject device = json["device"].to<JsonObject>();
+    device["identifiers"].to<JsonArray>().add(uid);
+    device["name"] = name.empty() ? std::string("Nuki ") + this->kind() : name;
+    device["manufacturer"] = "Nuki";
+    device["model"] = strcmp(this->kind(), "opener") == 0 ? "Opener" : "Smart Lock";
+    device["sw_version"] = firmware;
+    fill(json);
+    std::string out;
+    serializeJson(doc, out);
+    const std::string topic = this->discovery_prefix_ + "/" + component + "/" + uid + "/" + object + "/config";
+    mqtt::global_mqtt_client->publish(topic, out.c_str(), out.size(), 1, true);
+  };
+
+  announce("lock", "lock", [&](JsonObject json) {
+    json["name"] = nullptr;
+    json["state_topic"] = base + "/hastate";
+    json["command_topic"] = base + "/action";
+    json["state_locked"] = "locked";
+    json["state_unlocked"] = "unlocked";
+    json["state_locking"] = "locking";
+    json["state_unlocking"] = "unlocking";
+    json["state_jammed"] = "jammed";
+    json["value_template"] = "{{ 'unlocked' if value in ('open', 'opening') else value }}";
+    this->describe_for_discovery(json);
+  });
+  announce("binary_sensor", "battery_critical", [&](JsonObject json) {
+    json["name"] = "Battery critical";
+    json["device_class"] = "battery";
+    json["entity_category"] = "diagnostic";
+    json["state_topic"] = base + "/battery/basicJson";
+    json["value_template"] = "{{ 'ON' if value_json.critical | int == 1 else 'OFF' }}";
+  });
+  announce("binary_sensor", "keypad_battery_critical", [&](JsonObject json) {
+    json["name"] = "Keypad battery critical";
+    json["device_class"] = "battery";
+    json["entity_category"] = "diagnostic";
+    json["state_topic"] = base + "/battery/basicJson";
+    json["value_template"] = "{{ 'ON' if value_json.keypadCritical | int == 1 else 'OFF' }}";
+  });
+  if (this->has_ring()) {
+    announce("binary_sensor", "ring", [&](JsonObject json) {
+      json["name"] = "Ring";
+      json["state_topic"] = base + "/binaryRing";
+      json["payload_on"] = "ring";
+      json["payload_off"] = "standby";
+    });
+  }
+  announce("sensor", "rssi", [&](JsonObject json) {
+    json["name"] = "Bluetooth signal";
+    json["device_class"] = "signal_strength";
+    json["unit_of_measurement"] = "dBm";
+    json["entity_category"] = "diagnostic";
+    json["state_topic"] = base + "/rssi";
+  });
+  announce("sensor", "last_user", [&](JsonObject json) {
+    json["name"] = "Last user";
+    json["state_topic"] = base + "/authorizationName";
+  });
+  announce("sensor", "keypad_entries", [&](JsonObject json) {
+    json["name"] = "Keypad entries";
+    json["entity_category"] = "diagnostic";
+    json["state_topic"] = base + "/keypad/count";
+  });
+  announce("sensor", "state", [&](JsonObject json) {
+    json["name"] = "State";
+    json["state_topic"] = base + "/state";
+  });
+  ESP_LOGI(TAG, "Announced the %s to Home Assistant on %s", this->kind(), this->discovery_prefix_.c_str());
+#endif
 }
 
 // --------------------------------------------------------------------------------------------

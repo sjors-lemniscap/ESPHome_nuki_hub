@@ -53,6 +53,8 @@ CONF_UPDATE_TIME = "update_time"
 CONF_PUBLISH_MAINTENANCE = "publish_maintenance"
 CONF_MQTT_LOG = "mqtt_log"
 CONF_LOG_MARKER_IN_FLASH = "log_marker_in_flash"
+CONF_HOMEASSISTANT_DISCOVERY = "homeassistant_discovery"
+CONF_NUKI_HUB_ID = "nuki_hub_id"
 CONF_BLE_DISCONNECT_TIMEOUT = "ble_disconnect_timeout"
 CONF_BLUETOOTH_WATCHDOG = "bluetooth_watchdog"
 CONF_INVALID_CODE_ALERT = "invalid_code_alert"
@@ -154,6 +156,8 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_PUBLISH_MAINTENANCE, default=True): cv.boolean,
             cv.Optional(CONF_MQTT_LOG): logger.is_log_level,
             cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
+            # true for Home Assistant's default prefix, or the prefix itself
+            cv.Optional(CONF_HOMEASSISTANT_DISCOVERY, default=False): cv.Any(cv.boolean, _validate_topic_prefix),
             cv.Optional(CONF_BLE_DISCONNECT_TIMEOUT, default="2s"): cv.All(
                 cv.positive_time_period_milliseconds, cv.Range(max=cv.TimePeriod(seconds=20))
             ),
@@ -277,6 +281,8 @@ async def to_code(config):
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
+    if discovery := config[CONF_HOMEASSISTANT_DISCOVERY]:
+        cg.add(var.set_homeassistant_discovery("homeassistant" if discovery is True else discovery))
     cg.add(var.set_ble_disconnect_timeout(config[CONF_BLE_DISCONNECT_TIMEOUT]))
     cg.add(var.set_bluetooth_watchdog(config[CONF_BLUETOOTH_WATCHDOG]))
     if alert := config.get(CONF_INVALID_CODE_ALERT):

@@ -29,7 +29,8 @@ class NukiHubLock : public NukiHubComponent {
   Operation make_battery_operation() override;
   Operation make_time_control_operation() override;
   Operation make_log_operation() override;
-  bool queue_action(const std::string &action, const std::string &request_id) override;
+  bool queue_action(const std::string &action, const std::string &request_id, uint8_t timeout = 0) override;
+  void queue_log_range(uint32_t from, uint32_t to, const std::string &request_id) override;
   void handle_config_action(const std::string &payload) override;
   void handle_time_control_action(const std::string &payload) override;
   bool has_keypad() const override {
@@ -38,6 +39,10 @@ class NukiHubLock : public NukiHubComponent {
   }
   bool config_valid() const override { return this->config_valid_; }
   void publish_unavailable() override;
+  bool battery_critical() override { return this->nuki_lock_.is_battery_critical(); }
+  bool keypad_battery_critical() override { return this->nuki_lock_.is_keypad_battery_critical(); }
+  std::string state_text() const override;
+  void describe_for_discovery(JsonObject lock) override;
 
   void publish_state_();
   void publish_config_();

@@ -437,6 +437,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
 
     /// The id the device gave the keypad code added last, 0 if it sent none
     uint16_t get_last_keypad_code_id() const { return this->last_keypad_code_id_; }
+    size_t get_fingerprint_entry_list_size() const { return this->list_of_fingerprint_entries_.size(); }
     void clear_last_keypad_code_id() { this->last_keypad_code_id_ = 0; }
 
     bool import_credentials(const uint8_t* ble_address, const uint8_t* secret_key, const uint8_t* authorization_id,
@@ -700,6 +701,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     // No count notification precedes fingerprint entries, so the final size isn't known
     // up front - std::vector still avoids std::list's per-node allocations.
     std::vector<FingerprintEntry> list_of_fingerprint_entries_;
+    bool fingerprint_request_started_ = false;
     esphome::FixedVector<AuthorizationEntry> list_of_authorization_entries_;
     AuthorizationIdType authorization_id_type_ = AuthorizationIdType::Bridge;
 };

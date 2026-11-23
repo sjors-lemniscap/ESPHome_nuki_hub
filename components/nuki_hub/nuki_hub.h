@@ -11,6 +11,15 @@
 #ifdef USE_TIME
 #include "esphome/components/time/real_time_clock.h"
 #endif
+#ifdef USE_BINARY_SENSOR
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#endif
+#ifdef USE_SENSOR
+#include "esphome/components/sensor/sensor.h"
+#endif
+#ifdef USE_TEXT_SENSOR
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
 
 #include <cstdint>
 #include <deque>
@@ -126,6 +135,23 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_publish_maintenance(bool enabled) { this->maintenance_enabled_ = enabled; }
   void set_mqtt_log_level(uint8_t level) { this->mqtt_log_level_ = level; }
   void set_log_marker_in_flash(bool enabled) { this->log_marker_in_flash_ = enabled; }
+  void set_homeassistant_discovery(const std::string &prefix) { this->discovery_prefix_ = prefix; }
+#ifdef USE_BINARY_SENSOR
+  void set_available_binary_sensor(binary_sensor::BinarySensor *s) { this->available_binary_sensor_ = s; }
+  void set_battery_critical_binary_sensor(binary_sensor::BinarySensor *s) { this->battery_critical_binary_sensor_ = s; }
+  void set_keypad_battery_critical_binary_sensor(binary_sensor::BinarySensor *s) {
+    this->keypad_battery_critical_binary_sensor_ = s;
+  }
+  void set_ring_binary_sensor(binary_sensor::BinarySensor *s) { this->ring_binary_sensor_ = s; }
+#endif
+#ifdef USE_SENSOR
+  void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
+  void set_keypad_entries_sensor(sensor::Sensor *s) { this->keypad_entries_sensor_ = s; }
+#endif
+#ifdef USE_TEXT_SENSOR
+  void set_state_text_sensor(text_sensor::TextSensor *s) { this->state_text_sensor_ = s; }
+  void set_last_user_text_sensor(text_sensor::TextSensor *s) { this->last_user_text_sensor_ = s; }
+#endif
   void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
   void set_bluetooth_watchdog(uint32_t seconds) { this->bluetooth_watchdog_ = seconds; }
   void set_invalid_code_alert(uint8_t count, uint32_t window_seconds) {
@@ -172,12 +198,22 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   virtual Operation make_time_control_operation() = 0;
   /// Reads the activity log from `start_index` on (0: only the newest entries)
   virtual Operation make_log_operation() = 0;
-  virtual bool queue_action(const std::string &action, const std::string &request_id) = 0;
+  /// `timeout` in minutes for actions that take one (continuous mode of an Opener), 0 for none
+  virtual bool queue_action(const std::string &action, const std::string &request_id, uint8_t timeout = 0) = 0;
+  /// Reads the log entries `from`..`to` and publishes them on `logRange`
+  virtual void queue_log_range(uint32_t from, uint32_t to, const std::string &request_id) = 0;
   virtual void handle_config_action(const std::string &payload) = 0;
   virtual void handle_time_control_action(const std::string &payload) = 0;
   virtual bool has_keypad() const = 0;
   virtual bool config_valid() const = 0;
   virtual void publish_unavailable() {}
+  virtual bool battery_critical() = 0;
+  virtual bool keypad_battery_critical() = 0;
+  /// The state as Nuki Hub names it ("locked", "RTOactive", ...)
+  virtual std::string state_text() const = 0;
+  /// What a Home Assistant lock sends to lock, unlock and open, and whether the device rings
+  virtual void describe_for_discovery(JsonObject lock) = 0;
+  virtual bool has_ring() const { return false; }
 
   // --- shared machinery -----------------------------------------------------------------
   void enqueue(Operation op, bool front = false);
@@ -246,6 +282,12 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void publish_event_(const char *type, JsonObject entry);
   void note_invalid_code_();
   void check_bluetooth_watchdog_(uint32_t now);
+  /// Brings the entities of the ESPHome API up to date
+  void update_entities_();
+  void set_ring_entity_(bool ringing);
+  /// Announces the device to Home Assistant over MQTT
+  void publish_discovery_(uint32_t nuki_id, const std::string &name, const std::string &firmware);
+  Operation make_fingerprint_operation_();
 
   static const char *result_to_string(CmdResult result);
 
@@ -280,6 +322,26 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool maintenance_enabled_{true};
   uint8_t mqtt_log_level_{0};
   bool log_marker_in_flash_{false};
+  std::string discovery_prefix_;
+  bool discovery_published_{false};
+  bool want_fingerprints_{false};
+  bool fingerprint_settling_{false};
+  size_t fingerprint_last_size_{0};
+  uint32_t fingerprint_last_change_{0};
+#ifdef USE_BINARY_SENSOR
+  binary_sensor::BinarySensor *available_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *battery_critical_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *keypad_battery_critical_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *ring_binary_sensor_{nullptr};
+#endif
+#ifdef USE_SENSOR
+  sensor::Sensor *rssi_sensor_{nullptr};
+  sensor::Sensor *keypad_entries_sensor_{nullptr};
+#endif
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *state_text_sensor_{nullptr};
+  text_sensor::TextSensor *last_user_text_sensor_{nullptr};
+#endif
   ESPPreferenceObject log_marker_pref_;
   uint32_t ble_disconnect_timeout_{2000};
   uint32_t bluetooth_watchdog_{0};

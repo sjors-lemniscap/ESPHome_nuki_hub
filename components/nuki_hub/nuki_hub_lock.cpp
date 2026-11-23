@@ -150,6 +150,16 @@ void NukiHubLock::publish_state_() {
 
 void NukiHubLock::publish_unavailable() { this->state_known_ = false; }
 
+std::string NukiHubLock::state_text() const {
+  return this->state_known_ ? text_of(lock_state_to_string, this->state_.lockState) : "undefined";
+}
+
+void NukiHubLock::describe_for_discovery(JsonObject lock) {
+  lock["payload_lock"] = "lock";
+  lock["payload_unlock"] = "unlock";
+  lock["payload_open"] = "unlatch";
+}
+
 lock::LockState NukiHubLock::entity_state() const {
   if (!this->state_known_) {
     return lock::LOCK_STATE_NONE;
@@ -171,7 +181,7 @@ lock::LockState NukiHubLock::entity_state() const {
 // Actions
 // --------------------------------------------------------------------------------------------
 
-bool NukiHubLock::queue_action(const std::string &text, const std::string &request_id) {
+bool NukiHubLock::queue_action(const std::string &text, const std::string &request_id, uint8_t timeout) {
   const uint32_t received_at = millis();
   uint8_t value;
   if (!action_of(LOCK_ACTIONS, text, &value)) {
@@ -306,6 +316,9 @@ void NukiHubLock::publish_config_() {
     json["matterStatus"] = c.matterStatus;
   }
   this->publish_json_("/configuration/basicJson", json);
+  char firmware[16];
+  snprintf(firmware, sizeof(firmware), "%d.%d.%d", c.firmwareVersion[0], c.firmwareVersion[1], c.firmwareVersion[2]);
+  this->publish_discovery_(c.nukiId, util::fixed_string(c.name, sizeof(c.name)), firmware);
   ESP_LOGI(TAG, "Lock config read: firmware %d.%d.%d, keypad %s", c.firmwareVersion[0], c.firmwareVersion[1],
            c.firmwareVersion[2], YESNO(this->has_keypad()));
 }
@@ -872,6 +885,42 @@ Operation NukiHubLock::make_log_operation() {
   return op;
 }
 
+void NukiHubLock::queue_log_range(uint32_t from, uint32_t to, const std::string &request_id) {
+  const uint32_t received_at = millis();
+  Operation op;
+  op.name = "read log range";
+  this->list_settling_ = false;
+  op.step = [this, from, to] {
+    CmdResult result = this->list_settling_
+                           ? CmdResult::Success
+                           : this->nuki_lock_.retrieve_log_entries(from - 1, to - from + 2, 0, false);
+    if (result == CmdResult::Working) {
+      return result;
+    }
+    return this->settle_list_(result, this->nuki_lock_.get_log_entry_list_size());
+  };
+  op.done = [this, from, to, request_id, received_at](CmdResult result) {
+    this->list_settling_ = false;
+    std::vector<LogEntry> entries;
+    if (result == CmdResult::Success) {
+      this->nuki_lock_.get_log_entries(&entries);
+      std::sort(entries.begin(), entries.end(), [](const LogEntry &a, const LogEntry &b) { return a.index < b.index; });
+    }
+    this->publish_result_("/logRange", request_id, "", result_to_string(result), result == CmdResult::Failed,
+                          received_at, [&](JsonObject json) {
+                            json["from"] = from;
+                            json["to"] = to;
+                            JsonArray list = json["entries"].to<JsonArray>();
+                            for (const auto &entry : entries) {
+                              if (entry.index >= from && entry.index <= to) {
+                                this->log_entry_to_json_(entry, list.add<JsonObject>());
+                              }
+                            }
+                          });
+  };
+  this->enqueue(std::move(op));
+}
+
 void NukiHubLock::log_entry_to_json_(const LogEntry &log, JsonObject entry) {
   std::string name = util::fixed_string(log.name, sizeof(log.name));
   if (name.empty() || name.size() == sizeof(log.name)) {
@@ -974,6 +1023,7 @@ void NukiHubLock::process_log_() {
     this->publish_int_("/authorizationId", this->last_auth_id_);
     this->publish_("/authorizationName", this->last_auth_name_);
   }
+  this->update_entities_();
   this->log_batch_.clear();
 }
 

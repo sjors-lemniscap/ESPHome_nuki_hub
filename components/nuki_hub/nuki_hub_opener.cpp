@@ -160,6 +160,22 @@ void NukiHubOpener::publish_state_() {
 
 void NukiHubOpener::publish_unavailable() { this->state_known_ = false; }
 
+std::string NukiHubOpener::state_text() const {
+  if (!this->state_known_) {
+    return "undefined";
+  }
+  if (this->state_.nukiState == opener::State::ContinuousMode) {
+    return "continuousMode";
+  }
+  return name_of(LOCK_STATES, (uint8_t) this->state_.lockState, "undefined");
+}
+
+void NukiHubOpener::describe_for_discovery(JsonObject lock) {
+  lock["payload_lock"] = "deactivateRTO";
+  lock["payload_unlock"] = "activateRTO";
+  lock["payload_open"] = "electricStrikeActuation";
+}
+
 lock::LockState NukiHubOpener::entity_state() const {
   if (!this->state_known_) {
     return lock::LOCK_STATE_NONE;
@@ -180,9 +196,11 @@ void NukiHubOpener::publish_ring_(bool locked) {
   ESP_LOGI(TAG, "Ring detected (%s)", locked ? "locked" : "open");
   this->publish_("/ring", locked ? "ringlocked" : "ring");
   this->publish_("/binaryRing", "ring");
+  this->set_ring_entity_(true);
   this->set_timeout("ring_reset", 2000, [this] {
     this->publish_("/ring", "standby");
     this->publish_("/binaryRing", "standby");
+    this->set_ring_entity_(false);
   });
 }
 
@@ -190,7 +208,7 @@ void NukiHubOpener::publish_ring_(bool locked) {
 // Actions
 // --------------------------------------------------------------------------------------------
 
-bool NukiHubOpener::queue_action(const std::string &text, const std::string &request_id) {
+bool NukiHubOpener::queue_action(const std::string &text, const std::string &request_id, uint8_t timeout) {
   const uint32_t received_at = millis();
   opener::LockAction action;
   if (!parse_lock_action(text, &action)) {
@@ -199,13 +217,16 @@ bool NukiHubOpener::queue_action(const std::string &text, const std::string &req
   Operation op;
   op.name = "opener action";
   auto started = std::make_shared<bool>(false);
-  op.step = [this, action, started] {
+  op.step = [this, action, started, timeout] {
     if (!*started) {
       // Only what the Opener pushes during this action counts as its outcome
       *started = true;
       this->nuki_opener_.clear_pushed_opener_state();
     }
-    CmdResult result = this->nuki_opener_.lock_action(action, 0, 0);
+    // Continuous mode can end by itself after a number of minutes
+    CmdResult result = action == opener::LockAction::ActivateCM && timeout > 0
+                           ? this->nuki_opener_.continuous_mode(true, timeout)
+                           : this->nuki_opener_.lock_action(action, 0, 0);
     if (result != CmdResult::Working) {
       this->publish_("/commandResult", result_to_string(result));
     }
@@ -317,6 +338,9 @@ void NukiHubOpener::publish_config_() {
   timezone_to_string(c.timeZoneId, buf);
   json["timeZone"] = buf;
   this->publish_json_("/configuration/basicJson", json);
+  char firmware[16];
+  snprintf(firmware, sizeof(firmware), "%d.%d.%d", c.firmwareVersion[0], c.firmwareVersion[1], c.firmwareVersion[2]);
+  this->publish_discovery_(c.nukiId, util::fixed_string(c.name, sizeof(c.name)), firmware);
   ESP_LOGI(TAG, "Opener config read: firmware %d.%d.%d, keypad %s", c.firmwareVersion[0], c.firmwareVersion[1],
            c.firmwareVersion[2], YESNO(this->has_keypad()));
 }
@@ -851,6 +875,34 @@ Operation NukiHubOpener::make_log_operation() {
   return op;
 }
 
+void NukiHubOpener::queue_log_range(uint32_t from, uint32_t to, const std::string &request_id) {
+  const uint32_t received_at = millis();
+  Operation op;
+  op.name = "read log range";
+  // The Opener answers with the entries after the start index, see make_log_operation()
+  op.step = [this, from, to] { return this->nuki_opener_.retrieve_log_entries(from - 1, to - from + 2, 0, false); };
+  op.done = [this, from, to, request_id, received_at](CmdResult result) {
+    std::vector<opener::LogEntry> entries;
+    if (result == CmdResult::Success) {
+      this->nuki_opener_.get_log_entries(&entries);
+      std::sort(entries.begin(), entries.end(),
+                [](const opener::LogEntry &a, const opener::LogEntry &b) { return a.index < b.index; });
+    }
+    this->publish_result_("/logRange", request_id, "", result_to_string(result), result == CmdResult::Failed,
+                          received_at, [&](JsonObject json) {
+                            json["from"] = from;
+                            json["to"] = to;
+                            JsonArray list = json["entries"].to<JsonArray>();
+                            for (const auto &entry : entries) {
+                              if (entry.index >= from && entry.index <= to) {
+                                this->log_entry_to_json_(entry, list.add<JsonObject>());
+                              }
+                            }
+                          });
+  };
+  this->enqueue(std::move(op));
+}
+
 void NukiHubOpener::log_entry_to_json_(const opener::LogEntry &log, JsonObject entry) {
   std::string name = util::fixed_string(log.name, sizeof(log.name));
   if (name.empty() || name.size() == sizeof(log.name)) {
@@ -969,6 +1021,7 @@ void NukiHubOpener::process_log_() {
     this->publish_int_("/authorizationId", this->last_auth_id_);
     this->publish_("/authorizationName", this->last_auth_name_);
   }
+  this->update_entities_();
   this->log_batch_.clear();
 }
 
