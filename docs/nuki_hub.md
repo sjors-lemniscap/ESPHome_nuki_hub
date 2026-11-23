@@ -148,15 +148,17 @@ All below `<prefix>/opener` or `<prefix>/lock`. Topics in the "write" rows are s
 | `rssi`, `address`, `statusUpdated`, `retry` | read | |
 | `battery/basicJson`, `battery/advancedJson` | read | JSON |
 | `info/firmwareVersion`, `info/hardwareVersion` | read | of the Nuki device |
-| `action` | write | `activateRTO`, `deactivateRTO`, `electricStrikeActuation`, `activateCM`, `deactivateCM` (Opener); `unlock`, `lock`, `unlatch`, `lockNgo`, `lockNgoUnlatch`, `fullLock` (Smart Lock); `fobAction1` to `3`. Answered with `ack` or `unknown_action` on the same topic |
+| `action` | write | `activateRTO`, `deactivateRTO`, `electricStrikeActuation`, `activateCM`, `deactivateCM` (Opener); `unlock`, `lock`, `unlatch`, `lockNgo`, `lockNgoUnlatch`, `fullLock` (Smart Lock); `fobAction1` to `3`. Answered on the same topic with `ack`, `unknown_action`, or `denied` while not paired |
 | `commandResult` | read | result of the action: `success`, `failed`, `timeOut`, `busy`, `notPaired`, `error` |
-| `query/lockstate`, `query/config`, `query/battery`, `query/keypad` | write | `1` reads again |
+| `query/lockstate`, `query/config`, `query/battery`, `query/keypad` | write | `1` reads again, and is answered with `0` on the same topic |
 | `query/lockstateCommandResult` | read | |
+| `doorSensorState` | read | Smart Lock only |
 | `keypad/json` | read | all keypad entries |
-| `keypad/actionJson` | write | `{"action":"add","name":"...","code":345678,"enabled":1,"timeLimited":1,"allowedFrom":"2026-09-17 08:00:00","allowedUntil":"2026-09-17 10:00:00","allowedWeekdays":["mon","tue"],"allowedFromTime":"08:00","allowedUntilTime":"10:00"}`, `update` and `delete` with `codeId` |
+| `keypad/count` | read | their number |
+| `keypad/actionJson` | write | Names longer than 20 characters are cut off.  `{"action":"add","name":"...","code":345678,"enabled":1,"timeLimited":1,"allowedFrom":"2026-09-17 08:00:00","allowedUntil":"2026-09-17 10:00:00","allowedWeekdays":["mon","tue"],"allowedFromTime":"08:00","allowedUntilTime":"10:00"}`, `update` and `delete` with `codeId` |
 | `keypad/commandResultJson` | read | `success` or the reason it was refused |
 | `authorization/json` | read | |
-| `authorization/action` | write | `update` and `delete` with `authId` |
+| `authorization/action` | write | `update` and `delete` with `authId`. `add` is answered with `addNotSupported` |
 | `authorization/commandResult` | read | |
 | `timecontrol/json` | read | |
 | `timecontrol/action` | write | `{"action":"add","weekdays":["mon"],"time":"08:00","lockAction":"activateRTO"}`, `update` and `delete` with `entryId` |
@@ -175,7 +177,8 @@ Below `<prefix>`:
 | --- | --- | --- |
 | `maintenance/uptime` | read | minutes |
 | `maintenance/freeHeap`, `maintenance/wifiRssi` | read | |
-| `maintenance/restartReasonNukiHub` | read | `RequestedViaMqtt` or `NotApplicable` |
+| `maintenance/restartReasonNukiHub` | read | `RequestedViaMqtt`, `BluetoothWatchdog` or `NotApplicable` |
+| `maintenance/networkDevice` | read | `Built-in Wi-Fi` or `Ethernet` |
 | `maintenance/restartReasonNukiEsp` | read | the ESP32's reset reason |
 | `maintenance/mqttConnectionState` | read | `online` / `offline` (set in `mqtt:`) |
 | `maintenance/log` | read | log lines, with `mqtt_log` |
@@ -240,23 +243,36 @@ on `keypad/batchResult` (at most 50 commands):
 The keypad is read, missing entries are added, differing ones updated, and entries with the
 prefix that are not in the list deleted. Entries with other names are never touched, and the
 prefix must have at least three characters. `"dryRun":true` only reports what would happen.
-The answer on `keypad/syncResult` has `adds`, `updates`, `deletes`, `unchanged` and the
-results of the commands like a batch.
+The answer on `keypad/syncResult` has `prefix`, `adds`, `updates`, `deletes` and `unchanged`,
+and, if commands were needed, their results like a batch. A dry run is answered with the
+result `dryRun`. Refusals: `invalidPrefix`, `invalidEntryName` (a name without the prefix or
+longer than 20 characters), `tooManyCommands` (more than 50 changes), `busy`.
+
+A batch is refused as a whole with `noCommands`, `tooManyCommands` or `busy`.
 
 **Deadline.** `"timeoutMs"` in a keypad command: if the command waited in the queue longer
 than that, it is answered with `expired` and not executed.
 
 **Repeated add.** An `add` the device refuses because the code exists is answered with
-`success`, `"existed":true` and the id of the entry, if that entry has the same name and
-code: the answer to an earlier attempt was lost, the entry is there.
+`success`, `"existed":true` and the id of the entry, if that entry has the same name, code
+and time limits: the answer to an earlier attempt was lost, the entry is there.
 
 **Events**, not retained, one per new activity log entry: `event/keypad` (a code or
 fingerprint was used, or refused), `event/action` (a lock action), `event/ring` (Opener: the
-bell). The payload is the log entry as on `rollingLog`, with `time` as one string.
-`event/invalidCodes` with `invalid_code_alert`.
+bell). The payload is the log entry as on `rollingLog`, with `time` added as one string.
+`event/invalidCodes` with `invalid_code_alert`: `{"count":3,"windowSeconds":300}`.
 
-**`query/logRange`**: `{"from":100,"to":120}` reads log entries by index (at most 100), the
-answer comes on `logRange`.
+**`query/logRange`**: `{"from":100,"to":120,"requestId":"l1"}` reads log entries by index (at
+most 100). The answer on `logRange` has `from`, `to` and `entries`, or one of the refusals
+`invalidRange`, `rangeTooLarge`, `notPaired`, `noValidPinSet`.
+
+**Keypad `check`** (with `keypad_check_code`): `{"action":"check","codeId":105,"code":345678}`
+is answered with `codeValid` or `codeInvalid`.
+
+**`"ifExpired":true`** in a keypad `delete`: the entry is only deleted if its time limit has
+run out when the command is executed, otherwise the answer is `notExpired`. Needs
+`keypad_delete_expired`, whose `after` it uses. The automatic removal publishes its combined
+result on `keypad/expiredResult`.
 
 **`query/authorizations`, `query/timecontrol`, `query/fingerprints`**: `1` reads the list
 again. Fingerprints (Keypad 2) are published on `fingerprint/json` on request only.
@@ -264,8 +280,9 @@ again. Fingerprints (Keypad 2) are published on `fingerprint/json` on request on
 **Continuous mode for a time** (Opener): `{"action":"activateCM","timeout":30}` on `action`
 switches it on for 30 minutes.
 
-**`audit`**, not retained: every answered command, whatever its kind, with `command`,
-`action`, `result` and `requestId`.
+**`audit`**, not retained: every answered lock action, single keypad, authorization and time
+control command and log range request, with `command`, `action`, `result` and `requestId`.
+Batches, syncs and configuration writes are answered on their own topics only.
 
 **`bluetoothJson`**, retained, once a minute: commands since boot, failures, retries, average
 and longest duration.
@@ -282,11 +299,12 @@ have it and so cannot show internal memory running out.
 
 ## Command queue and results
 
-Results are published retained, like Nuki Hub does, and reset to `--` when the ESP32 connects
-to the broker.
+Results are published retained, like Nuki Hub does. When the ESP32 connects to the broker,
+the command topics and `keypad/commandResultJson` are reset to `--`; the other results keep
+their last value.
 
 Only one command at a time can travel over the Bluetooth link. Commands that arrive while
-another one is running wait in a queue (24 deep) and are answered one after the other, in the
+another one is running wait in a queue (64 deep) and are answered one after the other, in the
 order they arrived; lock actions go first. A command that gets no answer is retried
 (`command_retries`). A command the device refuses is answered with `failed` right away.
 If the Nuki device cannot be reached within 10 seconds (out of range, without power, or
@@ -317,7 +335,7 @@ button:
 | --- | --- |
 | `nuki_hub.action` | Queues a lock action by its name, see `action` under [Topics](#topics). `action` can be a lambda |
 | `nuki_hub.command` | Does what a message on a command topic does: `topic` is the part after `<prefix>/<kind>` (`/keypad/actionJson`, `/keypad/syncJson`, `/timecontrol/action`, ...), `payload` the message. Works without MQTT |
-| `on_message` (trigger, in the `nuki_hub:` entry) | Fires for everything the device publishes, with `topic` (same form) and `payload`. Works without MQTT |
+| `on_message` (trigger, in the `nuki_hub:` entry) | Fires for everything published below `<prefix>/<kind>` (not the `maintenance` and `info` topics of the ESP32), with `topic` (same form) and `payload`. Works without MQTT |
 | `nuki_hub.set_pairing_mode` | `pairing_mode: true` looks for a Nuki device in pairing mode until one is paired |
 | `nuki_hub.unpair` | Forgets the pairing |
 | `nuki_hub.paired` | Condition: a pairing is stored |
@@ -430,8 +448,8 @@ restarts the ESP32 after 15 minutes without an API client.
   topics next to the JSON ones.
 - `authorization/action` cannot add an authorization.
 - No hybrid mode (official MQTT of Smart Lock 4/5), GPIO lock control, HTTP bridge API.
-- An accepted lock action is given 15 seconds (an Opener: the strike duration plus 5 seconds)
-  to report its completion instead of the command timeout, so an action is not repeated
+- An accepted lock action is given 15 seconds (an Opener: strike delay plus strike duration
+  plus 5 seconds, if that is more) to report its completion instead of the command timeout, so an action is not repeated
   because the strike was still held.
 - Log gaps are requested from one entry earlier than Nuki Hub does: an Opener with firmware
   1.12.4 answers with the entries after the requested index.

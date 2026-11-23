@@ -24,7 +24,9 @@ the Wi-Fi and broker passwords: store it like a password.
 python3 tools/nuki_hub_pairing.py --dump nukihub-backup.bin --out secrets-room.yaml
 ```
 
-The tool prints what it found and writes the values to the file: Bluetooth address, pairing
+(`--port /dev/ttyACM0` instead of `--dump` reads the settings straight from the ESP32, and
+`--device opener` or `lock` chooses if Nuki Hub was paired with both.) The tool prints what
+it found and writes the values to the file: Bluetooth address, pairing
 key, authorization id, security PIN, and the Wi-Fi and broker settings Nuki Hub used. Copy
 them into your `secrets.yaml`.
 
@@ -48,7 +50,7 @@ Nuki Hub's web interface:
 | MQTT logging | `mqtt_log: INFO` |
 | Query intervals | `query_interval_state`, `_config`, `_battery`, `_keypad` |
 | Number of retries, retry delay | `command_retries`, `command_retry_delay` |
-| Restart on missing beacons | `bluetooth_watchdog` |
+| Restart on missing beacons | no equivalent. `bluetooth_watchdog` restarts the ESP32 when commands keep failing although the Nuki device is advertising |
 
 ## 4. Install
 

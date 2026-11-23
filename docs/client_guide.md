@@ -72,7 +72,7 @@ then does not have to request the list after its own commands.
 ## Who came in
 
 `event/keypad` arrives once per use of the keypad, in order, also for entries that happened
-while the ESP32 or the broker was away (they are caught up from the device's log):
+while the ESP32 or the broker was away (they are caught up from the device's log). Shortened:
 
 ```json
 {"index":812,"authorizationName":"Keypad","type":"KeypadAction","action":"ActivateRTO","trigger":"code","completionStatus":"success","codeId":105,"time":"2026-11-23 09:14:02"}
