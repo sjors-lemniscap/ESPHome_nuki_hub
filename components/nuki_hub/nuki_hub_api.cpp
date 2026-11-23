@@ -1,6 +1,7 @@
 #include "nuki_hub.h"
 
 #ifdef USE_NUKI_HUB_API
+#include "esphome/components/api/api_server.h"
 #include "esphome/components/api/custom_api_device.h"
 #include "esphome/core/log.h"
 
@@ -23,12 +24,24 @@ class NukiHubApi : public api::CustomAPIDevice {
     }
     this->components_.push_back(component);
     const std::string device = component->device_path();
-    component->add_on_message_callback([this, device](const std::string &topic, const std::string &payload) {
+    component->set_raw_message_hook([this, device](const char *topic, const char *payload, size_t length) {
       if (!this->is_connected()) {
         return;
       }
-      this->fire_homeassistant_event("esphome.nuki_hub",
-                                     {{"device", device}, {"topic", topic}, {"payload", payload}});
+      // As fire_homeassistant_event() does, without the copies a map of strings would make
+      api::HomeassistantActionRequest event;
+      event.service = ProgmemStringRef(StringRef("esphome.nuki_hub"));
+      event.is_event = true;
+      event.data.init(3);
+      auto add = [&event](const char *key, StringRef value) {
+        auto &pair = event.data.emplace_back();
+        pair.key = ProgmemStringRef(StringRef(key));
+        pair.value = ProgmemStringRef(value);
+      };
+      add("device", StringRef(device));
+      add("topic", StringRef(topic));
+      add("payload", StringRef(payload, length));
+      api::global_api_server->send_homeassistant_action(event);
     });
   }
 

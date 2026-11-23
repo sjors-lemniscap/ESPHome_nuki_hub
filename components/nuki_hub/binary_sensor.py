@@ -12,6 +12,17 @@ CONF_AVAILABLE = "available"
 CONF_BATTERY_CRITICAL = "battery_critical"
 CONF_KEYPAD_BATTERY_CRITICAL = "keypad_battery_critical"
 CONF_RING = "ring"
+CONF_TOPICS = "topics"
+CONF_TOPIC = "topic"
+CONF_PAYLOAD_ON = "payload_on"
+
+
+def _topic(value):
+    value = cv.string_strict(value)
+    if not value.startswith("/") or "#" in value or "+" in value:
+        raise cv.Invalid("A topic below the device, as in the documentation, starting with '/': /trigger")
+    return value
+
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -27,6 +38,12 @@ CONFIG_SCHEMA = cv.Schema(
         ),
         # Opener only: on for two seconds when someone rings
         cv.Optional(CONF_RING): binary_sensor.binary_sensor_schema(icon="mdi:bell-ring"),
+        # On while a topic has one payload: /doorSensorState with payload_on doorOpened, ...
+        cv.Optional(CONF_TOPICS): cv.ensure_list(
+            binary_sensor.binary_sensor_schema().extend(
+                {cv.Required(CONF_TOPIC): _topic, cv.Optional(CONF_PAYLOAD_ON, default="1"): cv.string_strict}
+            )
+        ),
     }
 )
 
@@ -37,3 +54,6 @@ async def to_code(config):
         if conf := config.get(key):
             var = await binary_sensor.new_binary_sensor(conf)
             cg.add(getattr(parent, f"set_{key}_binary_sensor")(var))
+    for conf in config.get(CONF_TOPICS, []):
+        var = await binary_sensor.new_binary_sensor(conf)
+        cg.add(parent.add_topic_binary_sensor(conf[CONF_TOPIC], conf[CONF_PAYLOAD_ON], var))

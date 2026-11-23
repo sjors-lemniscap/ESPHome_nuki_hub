@@ -31,6 +31,9 @@
 
 namespace esphome::nuki_hub {
 
+/// Where JSON documents live: PSRAM where the board has it, their size is not known beforehand
+inline ArduinoJson::Allocator *json_memory() { return json::heap_json_allocator(); }
+
 using nuki_lock::CmdResult;
 
 static const char *const NUKI_HUB_VERSION = "0.1.0";
@@ -53,9 +56,9 @@ struct KeypadBatch {
   size_t remaining{0};
   size_t succeeded{0};
   bool silent{false};
-  JsonDocument results;
+  JsonDocument results{json_memory()};
   /// Extra fields of the combined result
-  JsonDocument summary;
+  JsonDocument summary{json_memory()};
 };
 
 /// A keypad command on its way through the queue
@@ -124,6 +127,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_keypad_check_code(bool enabled) { this->keypad_check_code_ = enabled; }
   void set_keypad_fast_list(bool enabled) { this->keypad_fast_list_ = enabled; }
   void set_api_transport(bool enabled) { this->api_transport_ = enabled; }
+  void set_authorization_add(bool enabled) { this->authorization_add_ = enabled; }
   /// "<topic_prefix>/<opener|lock>", what the topics of this device start with
   std::string device_path() const { return this->topic_prefix_ + "/" + this->kind(); }
   void set_keypad_topic_per_entry(bool enabled) { this->keypad_topic_per_entry_ = enabled; }
@@ -151,13 +155,20 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
     this->keypad_battery_critical_binary_sensor_ = s;
   }
   void set_ring_binary_sensor(binary_sensor::BinarySensor *s) { this->ring_binary_sensor_ = s; }
+  void add_topic_binary_sensor(const std::string &topic, const std::string &payload_on, binary_sensor::BinarySensor *s) {
+    this->topic_binary_sensors_.push_back({topic, payload_on, s});
+  }
 #endif
 #ifdef USE_SENSOR
   void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
+  void add_topic_sensor(const std::string &topic, sensor::Sensor *s) { this->topic_sensors_.emplace_back(topic, s); }
   void set_keypad_entries_sensor(sensor::Sensor *s) { this->keypad_entries_sensor_ = s; }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_state_text_sensor(text_sensor::TextSensor *s) { this->state_text_sensor_ = s; }
+  void add_topic_text_sensor(const std::string &topic, text_sensor::TextSensor *s) {
+    this->topic_text_sensors_.emplace_back(topic, s);
+  }
   void set_last_user_text_sensor(text_sensor::TextSensor *s) { this->last_user_text_sensor_ = s; }
 #endif
   void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
@@ -195,6 +206,11 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// Called with the topic below `<prefix>/<kind>` and the payload of everything published
   template<typename F> void add_on_message_callback(F &&callback) {
     this->message_callback_.add(std::forward<F>(callback));
+    this->has_message_callbacks_ = true;
+  }
+  /// The same without a copy of the payload: it is only valid during the call
+  void set_raw_message_hook(std::function<void(const char *, const char *, size_t)> &&hook) {
+    this->raw_message_hook_ = std::move(hook);
   }
 
   /// The device state for a lock entity
@@ -230,6 +246,15 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   /// What a Home Assistant lock sends to lock, unlock and open, and whether the device rings
   virtual void describe_for_discovery(JsonObject lock) = 0;
   virtual bool has_ring() const { return false; }
+  /// A setting announced to Home Assistant: a switch, or a number when max > min
+  struct DiscoverySetting {
+    const char *key;
+    const char *name;
+    bool advanced;
+    int32_t min;
+    int32_t max;
+  };
+  virtual std::vector<DiscoverySetting> discovery_settings() const { return {}; }
 
   // --- shared machinery -----------------------------------------------------------------
   void enqueue(Operation op, bool front = false);
@@ -249,6 +274,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   std::string topic_(const char *suffix) const;
   std::string hub_topic_(const char *suffix) const;
   bool publish_(const char *suffix, const std::string &payload, bool retain = true);
+  bool publish_(const char *suffix, const char *payload, size_t length, bool retain);
   bool publish_(const char *suffix, const char *payload, bool retain = true);
   bool publish_int_(const char *suffix, int64_t value, bool retain = true);
   bool publish_json_(const char *suffix, JsonDocument &doc, bool retain = true);
@@ -290,6 +316,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void publish_keypad_();
   void publish_keypad_entries_();
   void describe_availability_(JsonObject json);
+  void update_topic_entities_(const char *suffix, const char *payload);
   void publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove);
   const nuki_lock::KeypadEntry *find_keypad_entry_(uint16_t code_id) const;
 
@@ -338,6 +365,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool keypad_check_code_{false};
   bool keypad_fast_list_{false};
   bool api_transport_{false};
+  bool authorization_add_{false};
   void attach_api_();
   bool keypad_topic_per_entry_{false};
   std::vector<uint16_t> keypad_published_ids_;
@@ -371,14 +399,22 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   binary_sensor::BinarySensor *battery_critical_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *keypad_battery_critical_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *ring_binary_sensor_{nullptr};
+  struct TopicBinarySensor {
+    std::string topic;
+    std::string payload_on;
+    binary_sensor::BinarySensor *sensor;
+  };
+  std::vector<TopicBinarySensor> topic_binary_sensors_;
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *rssi_sensor_{nullptr};
   sensor::Sensor *keypad_entries_sensor_{nullptr};
+  std::vector<std::pair<std::string, sensor::Sensor *>> topic_sensors_;
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *state_text_sensor_{nullptr};
   text_sensor::TextSensor *last_user_text_sensor_{nullptr};
+  std::vector<std::pair<std::string, text_sensor::TextSensor *>> topic_text_sensors_;
 #endif
   ESPPreferenceObject log_marker_pref_;
   uint32_t ble_disconnect_timeout_{2000};
@@ -480,7 +516,9 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   std::string last_auth_name_;
 
   CallbackManager<void()> state_callback_;
-  CallbackManager<void(std::string, std::string)> message_callback_;
+  CallbackManager<void(const std::string &, const std::string &)> message_callback_;
+  bool has_message_callbacks_{false};
+  std::function<void(const char *, const char *, size_t)> raw_message_hook_;
   struct Handler {
     std::string suffix;
     bool hub;
@@ -488,11 +526,15 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   };
   std::vector<Handler> handlers_;
   struct Outgoing {
-    std::string topic;
-    std::string payload;
+    char *data;  // topic, 0, payload, 0
+    uint32_t topic_length;
+    uint32_t length;
     bool retain;
   };
   std::deque<Outgoing> outbox_;
+  size_t outbox_bytes_{0};
+  bool keep_(const std::string &topic, const char *payload, size_t length, bool retain);
+  void drop_outgoing_(const Outgoing &message);
   uint32_t outbox_dropped_{0};
   static const size_t MAX_OUTBOX = 400;
 };

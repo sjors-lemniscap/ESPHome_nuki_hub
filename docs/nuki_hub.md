@@ -84,6 +84,7 @@ nuki_hub:
 | `log_marker_in_flash` | `false` | Keep the index of the last published log entry in flash instead of reading it back from the retained `lastRollingLog` |
 | `homeassistant_discovery` | `false` | `true` or a discovery prefix: announce the device to Home Assistant over MQTT |
 | `api_transport` | `false` | The topics over the ESPHome API as well: an action for commands and an event for everything published, see [Without a broker](#without-a-broker) |
+| `authorization_add` | `false` | Let a client create authorizations with `authorization/action`. An authorization is permanent access to the Nuki device for whoever holds its key |
 | `bluetooth_watchdog` | `30min` | Restart the ESP32 if no command got through for this long although the Nuki device is advertising. `0s` turns it off |
 | `fast_connection` | `true` | Ask for a short Bluetooth connection interval (7.5 to 15 ms) while connected. Commands get faster, see [measurements](benchmarks.md) |
 | `ble_disconnect_timeout` | `2s` | How long the Bluetooth connection is kept open after a command, for the next one |
@@ -169,7 +170,7 @@ All below `<prefix>/opener` or `<prefix>/lock`. Topics in the "write" rows are s
 | `keypad/actionJson` | write | Names longer than 20 characters are cut off.  `{"action":"add","name":"...","code":345678,"enabled":1,"timeLimited":1,"allowedFrom":"2026-09-17 08:00:00","allowedUntil":"2026-09-17 10:00:00","allowedWeekdays":["mon","tue"],"allowedFromTime":"08:00","allowedUntilTime":"10:00"}`, `update` and `delete` with `codeId` |
 | `keypad/commandResultJson` | read | `success` or the reason it was refused |
 | `authorization/json` | read | |
-| `authorization/action` | write | `update` and `delete` with `authId`. `add` is answered with `addNotSupported` |
+| `authorization/action` | write | `update` and `delete` with `authId`. `add` (`name`, optional `type` app/bridge/fob/keypad, `sharedKey` as 64 hex characters, `remoteAllowed`) only with `authorization_add: true`, otherwise `addNotSupported`. A key made by the ESP32 is told once on `authorization/added`, not retained |
 | `authorization/commandResult` | read | |
 | `timecontrol/json` | read | |
 | `timecontrol/action` | write | `{"action":"add","weekdays":["mon"],"time":"08:00","lockAction":"activateRTO"}`, `update` and `delete` with `entryId` |
@@ -258,7 +259,8 @@ prefix must have at least three characters. `"dryRun":true` only reports what wo
 The answer on `keypad/syncResult` has `prefix`, `adds`, `updates`, `deletes` and `unchanged`,
 and, if commands were needed, their results like a batch. A dry run is answered with the
 result `dryRun`. Refusals: `invalidPrefix`, `invalidEntryName` (a name without the prefix or
-longer than 20 characters), `tooManyCommands` (more than 50 changes), `busy`.
+longer than 20 characters), `busy`. A sync does at most 50 changes: with more to do the result carries `remaining`, and
+the same sync sent again goes on from there until it is gone.
 
 A batch is refused as a whole with `noCommands`, `tooManyCommands` or `busy`.
 
@@ -363,7 +365,9 @@ Three ways, which can be combined:
 
 - **MQTT discovery** (`homeassistant_discovery: true`): a lock, battery and ring binary
   sensors, signal, state, last user and keypad entry count, announced below `homeassistant/`.
-- **ESPHome API**: `lock`, `binary_sensor`, `sensor` and `text_sensor` platforms.
+- **ESPHome API**: `lock`, `binary_sensor`, `sensor` and `text_sensor` platforms. Besides
+  the entities they name, each takes `topics:`, a list of entities that follow anything the
+  device publishes (see below).
 - **Automations** on the ESP32 itself, see above.
 
 ```yaml
@@ -444,6 +448,45 @@ the event `esphome.nuki_hub` brings `{"requestId":"1","result":"success","codeId
 If Home Assistant is not always connected, set `api: reboot_timeout: 0s`: ESPHome otherwise
 restarts the ESP32 after 15 minutes without an API client.
 
+### Entities from topics
+
+Anything in the [topics](#topics) table can be an entity of the ESPHome API, without a
+broker:
+
+```yaml
+text_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    topics:
+      - topic: /trigger
+        name: Trigger
+      - topic: /doorSensorState      # Smart Lock
+        name: Door
+sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    topics:
+      - topic: /keypad/count
+        name: Keypad codes
+binary_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: entrance
+    topics:
+      - topic: /continuousMode
+        name: Continuous mode
+        payload_on: "on"
+```
+
+A sensor takes payloads that are a number, a binary sensor is on while the payload equals
+`payload_on` (default `1`).
+
+### Settings
+
+With MQTT discovery the main settings are announced as switches and numbers of the device
+(LED, button, sounds, timeouts; for a Smart Lock auto lock, night mode and durations).
+They read `configuration/basicJson` and `configuration/advancedJson` and write through
+`configuration/action`.
+
 ### Availability
 
 Entities announced over MQTT are available when the Nuki device answers (`availability`) and
@@ -489,6 +532,27 @@ Nothing is retained: a client asks for what it needs after connecting (`/query/k
 Assistant the events can be used in automations as they are. Measured on the rig, a keypad
 command takes as long as over MQTT (about 210 ms), see [benchmarks](benchmarks.md).
 
+## Many rooms
+
+`examples/fleet/` has one file with what all rooms share and one per room.
+`tools/fleet_generate.py rooms.json out/` writes the per-room files from a list of doors,
+makes an API key for each and the lines a client needs to reach them;
+`tools/fleet_update.sh` installs a build room by room, the first one as a canary.
+
+## Memory and large keypads
+
+The component's memory is the internal RAM of the ESP32, about 130 kB free with Bluetooth
+and Wi-Fi running. ESPHome does not hand PSRAM to ordinary allocations, so what can be
+large is placed there on purpose where a board has it: the JSON documents, the text of a
+message while it is built, and messages waiting for the MQTT client.
+
+- **With PSRAM**: tested with 82 keypad entries (a 25 kB list), lowest free internal RAM
+  94 kB.
+- **Without PSRAM**: all commands work with 80 entries, but a list too large for the free
+  RAM is not published (an error in the log says so) and at most 24 kB of messages wait
+  for the MQTT client. Up to about 40 entries the list is published.
+- A sync changes at most 50 entries at a time, see [sync](#additions-to-nuki-hubs-topics).
+
 ## Security
 
 - **Broker access.** Whoever may publish to `<prefix>/opener/action` can open the door, and
@@ -507,7 +571,7 @@ command takes as long as over MQTT (about 210 ms), see [benchmarks](benchmarks.m
 - Home Assistant discovery over MQTT covers the main entities, not every setting.
 - Per-entry keypad topics are keyed by code id (`keypad/codes/<code id>`), not by position.
   No per-entry topics for authorizations and no single value topics next to the JSON ones.
-- `authorization/action` cannot add an authorization.
+- `authorization/action` adds an authorization only with `authorization_add: true`.
 - No hybrid mode (official MQTT of Smart Lock 4/5), GPIO lock control, HTTP bridge API.
 - An accepted lock action is given 15 seconds (an Opener: strike delay plus strike duration
   plus 5 seconds, if that is more) to report its completion instead of the command timeout, so an action is not repeated
@@ -549,6 +613,14 @@ Failure cases tried on the rig:
   switches of deleted keypad entries do not stay behind.
 - **The ESPHome API transport**: 27 keypad commands from a Python client and the booking
   system's agent (Node) adding, updating and deleting a code, without a broker.
+
+- **80 keypad entries**: sync in two parts, list read, single commands and removal, with
+  and without PSRAM, no restart.
+- **Firmware update over the air during a sync of 60 entries**: installed, the device came
+  back paired, the interrupted sync got no answer and the same sync sent again finished it.
+- **Creating an authorization** and deleting it again.
+- **Builds**: Ethernet without Wi-Fi (Olimex ESP32-POE) and without PSRAM compile; the
+  one without PSRAM also ran all checks on the rig.
 
 Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the

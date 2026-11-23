@@ -74,7 +74,19 @@ two messages per entry per command, about 50 for a keypad with 25 entries, more 
 29 the MQTT client of ESPHome queues with `idf_send_async`. Messages the client cannot
 take at once now wait in the component and go out in order.
 
+## A full keypad
+
+80 entries added by a sync next to the one that was there (`tests/rig/large_keypad.js`):
+
+| | with PSRAM | without |
+| --- | --- | --- |
+| Sync that adds 80 entries (two parts of 50 and 30) | 22.0 s, 275 ms each | 21.6 s, 270 ms each |
+| List read, 25.6 kB | 220 ms | not published, too large |
+| Single add / update / delete with all there | 459 / 985 / 295 ms | 931 / 271 / 322 ms |
+| Sync that removes them | 22.7 s | 23.1 s |
+| Lowest free internal RAM | 94 kB | 7 kB |
+
 ## Not measured
 
-A Smart Lock, a board without PSRAM, Ethernet, a keypad with more than about 25 entries, and
-more than one Nuki device on one ESP32.
+A Smart Lock, a board with Ethernet (it compiles), and more than one Nuki device on one
+ESP32.

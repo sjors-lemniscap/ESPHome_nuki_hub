@@ -58,7 +58,8 @@ receive   <prefix>/opener/keypad/syncResult   {"requestId":"s1","result":"succes
 
 Entries with other names (hand-made ones, other systems) are never touched. Send
 `"dryRun":true` first to see what would change. A sync is safe to repeat: the second one
-reports everything `unchanged`.
+reports everything `unchanged`. A sync does at most 50 changes; if its result has
+`remaining`, send the same sync again until it has not.
 
 Entries are matched by name, so names must be unique within the prefix, and at most 20
 characters long.

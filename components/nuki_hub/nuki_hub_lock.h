@@ -43,6 +43,20 @@ class NukiHubLock : public NukiHubComponent {
   bool keypad_battery_critical() override { return this->nuki_lock_.is_keypad_battery_critical(); }
   std::string state_text() const override;
   void describe_for_discovery(JsonObject lock) override;
+  std::vector<DiscoverySetting> discovery_settings() const override {
+    return {
+        {"ledEnabled", "LED enabled", false, 0, 0},
+        {"buttonEnabled", "Button enabled", false, 0, 0},
+        {"autoUnlatch", "Auto unlatch", false, 0, 0},
+        {"singleLock", "Single lock", false, 0, 0},
+        {"ledBrightness", "LED brightness", false, 0, 5},
+        {"autoLockEnabled", "Auto lock", true, 0, 0},
+        {"immediateAutoLockEnabled", "Immediate auto lock", true, 0, 0},
+        {"nightModeEnabled", "Night mode", true, 0, 0},
+        {"autoLockTimeOut", "Auto lock timeout", true, 30, 1800},
+        {"unlatchDuration", "Unlatch duration", true, 1, 30},
+    };
+  }
 
   void publish_state_();
   void publish_config_();

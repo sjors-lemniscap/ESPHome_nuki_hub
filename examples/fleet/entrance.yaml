@@ -2,6 +2,7 @@
 # under names of this room.
 substitutions:
   room: entrance
+  host: nuki-entrance
   device: opener
   board: esp32-s3-devkitc-1
   timezone: Europe/Berlin
@@ -9,6 +10,7 @@ substitutions:
   ble_address: !secret entrance_nuki_ble_address
   secret_key: !secret entrance_nuki_secret_key
   auth_id: !secret entrance_nuki_auth_id
+  api_key: !secret entrance_api_key
 
 packages:
   room: !include room.yaml

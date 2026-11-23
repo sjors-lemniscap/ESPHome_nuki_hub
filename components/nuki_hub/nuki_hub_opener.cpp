@@ -132,7 +132,7 @@ void NukiHubOpener::publish_state_() {
     this->publish_("/binaryState", unlocked ? "unlocked" : "locked");
   }
 
-  JsonDocument json;
+  JsonDocument json(json_memory());
   char time[20];
   json["lock_state"] = lock_state;
   json["continuous_mode"] = continuous ? 1 : 0;
@@ -149,7 +149,7 @@ void NukiHubOpener::publish_state_() {
   json["auth_name"] = this->last_auth_name_;
   this->publish_json_("/json", json);
 
-  JsonDocument battery;
+  JsonDocument battery(json_memory());
   battery["critical"] = this->nuki_opener_.is_battery_critical() ? "1" : "0";
   battery["keypadCritical"] = this->nuki_opener_.is_keypad_battery_critical() ? "1" : "0";
   this->publish_json_("/battery/basicJson", battery);
@@ -306,7 +306,7 @@ Operation NukiHubOpener::make_config_operation() {
 
 void NukiHubOpener::publish_config_() {
   const opener::Config &c = this->config_;
-  JsonDocument json;
+  JsonDocument json(json_memory());
   char buf[40];
   snprintf(buf, sizeof(buf), "%" PRIx32, c.nukiId);
   json["nukiID"] = buf;
@@ -347,7 +347,7 @@ void NukiHubOpener::publish_config_() {
 
 void NukiHubOpener::publish_advanced_config_() {
   const opener::AdvancedConfig &c = this->advanced_config_;
-  JsonDocument json;
+  JsonDocument json(json_memory());
   json["intercomID"] = c.intercomID;
   json["busModeSwitch"] = c.busModeSwitch;
   json["shortCircuitDuration"] = c.shortCircuitDuration;
@@ -380,7 +380,7 @@ template<typename TConfig> struct Change {
 };
 
 void NukiHubOpener::handle_config_action(const std::string &payload) {
-  JsonDocument result;
+  JsonDocument result(json_memory());
   auto answer = [this, &result] { this->publish_json_("/configuration/commandResult", result); };
 
   if (!this->config_valid_ || !this->advanced_config_valid_) {
@@ -393,7 +393,7 @@ void NukiHubOpener::handle_config_action(const std::string &payload) {
     answer();
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json.is<JsonObjectConst>()) {
     result["general"] = "invalidJson";
     answer();
@@ -402,7 +402,7 @@ void NukiHubOpener::handle_config_action(const std::string &payload) {
 
   auto basic = std::make_shared<std::vector<Change<opener::Config>>>();
   auto advanced = std::make_shared<std::vector<Change<opener::AdvancedConfig>>>();
-  auto pending = std::make_shared<JsonDocument>();
+  auto pending = std::make_shared<JsonDocument>(json_memory());
   bool reboot = false;
 
   const opener::Config &c = this->config_;
@@ -661,7 +661,7 @@ Operation NukiHubOpener::make_battery_operation() {
       return;
     }
     const opener::BatteryReport &b = this->battery_report_;
-    JsonDocument json;
+    JsonDocument json(json_memory());
     json["batteryVoltage"] = b.batteryVoltage / 1000.0;
     json["critical"] = (b.criticalBatteryState & 1) ? 1 : 0;
     json["lockAction"] = name_of(LOCK_ACTIONS, (uint8_t) b.lockAction, "Unknown");
@@ -693,7 +693,7 @@ Operation NukiHubOpener::make_time_control_operation() {
 }
 
 void NukiHubOpener::publish_time_control_() {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   char tod[6];
   for (const auto &entry : this->time_control_entries_) {
@@ -719,7 +719,7 @@ void NukiHubOpener::handle_time_control_action(const std::string &payload) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json.is<JsonObjectConst>()) {
     answer("invalidJson");
     return;
@@ -986,14 +986,14 @@ void NukiHubOpener::process_log_() {
     this->publish_log_marker_();
   }
 
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   const size_t first_listed =
       this->log_batch_.size() > this->max_log_entries_ ? this->log_batch_.size() - this->max_log_entries_ : 0;
 
   for (size_t i = 0; i < this->log_batch_.size(); i++) {
     const opener::LogEntry &log = this->log_batch_[i];
-    JsonDocument single;
+    JsonDocument single(json_memory());
     JsonObject entry = single.to<JsonObject>();
     this->log_entry_to_json_(log, entry);
 

@@ -17,6 +17,7 @@
 #endif
 
 #include "esp_heap_caps.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 
@@ -231,24 +232,50 @@ std::string NukiHubComponent::hub_topic_(const char *suffix) const { return this
 // and so does everything after it, to keep the order. Log lines (qos 0) are not kept.
 bool NukiHubComponent::send_(const std::string &topic, const char *payload, size_t length, bool retain, uint8_t qos) {
 #ifdef USE_MQTT
-  if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
+  if (mqtt::global_mqtt_client == nullptr) {
     return false;
+  }
+  if (!mqtt::global_mqtt_client->is_connected()) {
+    // Clearing a retained topic is the one thing reading everything again after the
+    // reconnect does not repeat: it waits for the broker
+    return retain && length == 0 && this->keep_(topic, payload, 0, true);
   }
   if (this->outbox_.empty() && mqtt::global_mqtt_client->publish(topic.c_str(), payload, length, qos, retain)) {
     return true;
   }
-  if (qos == 0) {
-    return false;
-  }
-  if (this->outbox_.size() >= MAX_OUTBOX) {
-    this->outbox_dropped_++;
-    return false;
-  }
-  this->outbox_.push_back({topic, std::string(payload, length), retain});
-  return true;
+  return qos != 0 && this->keep_(topic, payload, length, retain);
 #else
   return false;
 #endif
+}
+
+// A waiting message is one block, the topic and the payload after it, in PSRAM where there
+// is one: a keypad with 80 entries is 160 messages at once, more than the internal RAM has
+// room for. Without PSRAM a small amount is kept and the rest is dropped and counted.
+bool NukiHubComponent::keep_(const std::string &topic, const char *payload, size_t length, bool retain) {
+  static const size_t limit = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0 ? 1024 * 1024 : 24 * 1024;
+  const size_t size = topic.size() + 1 + length + 1;
+  RAMAllocator<char> allocator;
+  char *data = this->outbox_.size() < MAX_OUTBOX && this->outbox_bytes_ + size <= limit ? allocator.allocate(size) : nullptr;
+  if (data == nullptr) {
+    this->outbox_dropped_++;
+    return false;
+  }
+  memcpy(data, topic.c_str(), topic.size() + 1);
+  if (length > 0) {
+    memcpy(data + topic.size() + 1, payload, length);
+  }
+  data[size - 1] = 0;
+  this->outbox_.push_back({data, (uint32_t) topic.size(), (uint32_t) length, retain});
+  this->outbox_bytes_ += size;
+  return true;
+}
+
+void NukiHubComponent::drop_outgoing_(const Outgoing &message) {
+  const size_t size = message.topic_length + 1 + message.length + 1;
+  RAMAllocator<char> allocator;
+  allocator.deallocate(message.data, size);
+  this->outbox_bytes_ -= size;
 }
 
 void NukiHubComponent::flush_outbox_() {
@@ -257,17 +284,26 @@ void NukiHubComponent::flush_outbox_() {
     return;
   }
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
-    // Published again from what is read after the reconnect
-    this->outbox_.clear();
+    // Published again from what is read after the reconnect, all but the topics to clear
+    std::deque<Outgoing> kept;
+    for (const auto &message : this->outbox_) {
+      if (message.retain && message.length == 0) {
+        kept.push_back(message);
+      } else {
+        this->drop_outgoing_(message);
+      }
+    }
+    this->outbox_.swap(kept);
     return;
   }
   for (int i = 0; i < 8 && !this->outbox_.empty(); i++) {
-    const auto &message = this->outbox_.front();
-    if (!mqtt::global_mqtt_client->publish(message.topic.c_str(), message.payload.c_str(), message.payload.size(), 1,
+    const Outgoing message = this->outbox_.front();
+    if (!mqtt::global_mqtt_client->publish(message.data, message.data + message.topic_length + 1, message.length, 1,
                                            message.retain)) {
       break;
     }
     this->outbox_.pop_front();
+    this->drop_outgoing_(message);
   }
   if (this->outbox_.empty() && this->outbox_dropped_ > 0) {
     ESP_LOGW(TAG, "%" PRIu32 " MQTT messages could not be kept for sending", this->outbox_dropped_);
@@ -280,6 +316,11 @@ void NukiHubComponent::flush_outbox_() {
 // serial log
 void NukiHubComponent::on_log_(uint8_t level, const char *message, size_t length) {
   if (level > this->mqtt_log_level_ || this->in_log_) {
+    return;
+  }
+  // ESPHome warns for every event while an API client is connected that did not ask for
+  // them: not worth a message each
+  if (this->api_transport_ && length > 20 && memmem(message, length, "esphome.nuki_hub' dropped", 25) != nullptr) {
     return;
   }
   this->in_log_ = true;
@@ -303,14 +344,54 @@ void NukiHubComponent::on_log_(uint8_t level, const char *message, size_t length
   this->in_log_ = false;
 }
 
+// Entities that follow a topic (topics: of the sensor, binary_sensor and text_sensor platforms)
+void NukiHubComponent::update_topic_entities_(const char *suffix, const char *payload) {
+#ifdef USE_TEXT_SENSOR
+  for (auto &entity : this->topic_text_sensors_) {
+    if (entity.first == suffix && entity.second->state != payload) {
+      entity.second->publish_state(payload);
+    }
+  }
+#endif
+#ifdef USE_SENSOR
+  for (auto &entity : this->topic_sensors_) {
+    if (entity.first == suffix) {
+      char *end = nullptr;
+      const float value = strtof(payload, &end);
+      if (end != payload && *end == 0) {
+        entity.second->publish_state(value);
+      }
+    }
+  }
+#endif
+#ifdef USE_BINARY_SENSOR
+  for (auto &entity : this->topic_binary_sensors_) {
+    if (entity.topic == suffix) {
+      entity.sensor->publish_state(entity.payload_on == payload);
+    }
+  }
+#endif
+}
+
+// Everything a device publishes goes through here. The payload is not copied on the way, a
+// keypad list can be tens of kilobytes and all of this lives in the internal RAM.
+bool NukiHubComponent::publish_(const char *suffix, const char *payload, size_t length, bool retain) {
+  this->update_topic_entities_(suffix, payload);
+  if (this->raw_message_hook_) {
+    this->raw_message_hook_(suffix, payload, length);
+  }
+  if (this->has_message_callbacks_) {
+    this->message_callback_.call(std::string(suffix), std::string(payload, length));
+  }
+  return this->send_(this->topic_(suffix), payload, length, retain);
+}
+
 bool NukiHubComponent::publish_(const char *suffix, const std::string &payload, bool retain) {
-  this->message_callback_.call(suffix, payload);
-  return this->send_(this->topic_(suffix), payload.c_str(), payload.size(), retain);
+  return this->publish_(suffix, payload.c_str(), payload.size(), retain);
 }
 
 bool NukiHubComponent::publish_(const char *suffix, const char *payload, bool retain) {
-  this->message_callback_.call(suffix, payload);
-  return this->send_(this->topic_(suffix), payload, strlen(payload), retain);
+  return this->publish_(suffix, payload, strlen(payload), retain);
 }
 
 bool NukiHubComponent::publish_int_(const char *suffix, int64_t value, bool retain) {
@@ -320,9 +401,28 @@ bool NukiHubComponent::publish_int_(const char *suffix, int64_t value, bool reta
 }
 
 bool NukiHubComponent::publish_json_(const char *suffix, JsonDocument &doc, bool retain) {
-  std::string out;
-  serializeJson(doc, out);
-  return this->publish_(suffix, out, retain);
+  // Written once into a buffer of the right size, in PSRAM where there is one. Without the
+  // memory for it nothing is published: better than the abort a failed std::string would be.
+  const size_t length = measureJson(doc);
+  // The MQTT client and the API each copy a message into the internal RAM to send it. A list
+  // too large for what is free there is left out, the commands keep working without it.
+  // (without PSRAM the text itself is a third copy there)
+  static const bool psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
+  if (length > 4096 && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < (psram ? 2 : 3) * length + 24576) {
+    ESP_LOGE(TAG, "%s is too large to publish (%u bytes, %u free)", suffix, (unsigned) length,
+             (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return false;
+  }
+  RAMAllocator<char> allocator;
+  char *buffer = allocator.allocate(length + 1);
+  if (buffer == nullptr) {
+    ESP_LOGE(TAG, "No memory for %s (%u bytes)", suffix, (unsigned) length);
+    return false;
+  }
+  serializeJson(doc, buffer, length + 1);
+  const bool sent = this->publish_(suffix, buffer, length, retain);
+  allocator.deallocate(buffer, length + 1);
+  return sent;
 }
 
 bool NukiHubComponent::publish_hub_(const char *suffix, const std::string &payload, bool retain) {
@@ -350,7 +450,7 @@ void NukiHubComponent::register_handlers_() {
     std::string request_id;
     uint8_t timeout = 0;
     if (payload[0] == '{') {
-      JsonDocument json;
+      JsonDocument json(json_memory());
       if (deserializeJson(json, payload) || !json["action"].is<const char *>()) {
         this->publish_("/action", "unknown_action");
         return;
@@ -402,7 +502,7 @@ void NukiHubComponent::register_handlers_() {
       return;
     }
     const std::string request_id = util::request_id(payload);
-    JsonDocument json;
+    JsonDocument json(json_memory());
     const bool valid = !deserializeJson(json, payload) && json["from"].is<unsigned int>();
     const uint32_t from = valid ? json["from"].as<unsigned int>() : 0;
     const uint32_t to = valid && json["to"].is<unsigned int>() ? json["to"].as<unsigned int>() : from;
@@ -631,7 +731,7 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
   this->publish_hub_("/maintenance/minFreeHeapInternal", buf);
   this->publish_status_();
   {
-    JsonDocument json;
+    JsonDocument json(json_memory());
     json["commands"] = this->stat_commands_;
     json["failed"] = this->stat_failed_;
     json["retries"] = this->stat_retries_;
@@ -689,7 +789,7 @@ void NukiHubComponent::set_available_(bool available) {
 
 // Everything about the link to the Nuki device in one message
 void NukiHubComponent::publish_status_() {
-  JsonDocument json;
+  JsonDocument json(json_memory());
   const bool paired = this->is_paired();
   json["paired"] = paired;
   json["available"] = this->available_;
@@ -751,7 +851,7 @@ const char *NukiHubComponent::error_name(uint8_t code) {
 void NukiHubComponent::publish_result_(const char *topic, const std::string &request_id, const std::string &action,
                                        const char *result, bool refused_by_device, uint32_t received_at,
                                        const std::function<void(JsonObject)> &extra) {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonObject json = doc.to<JsonObject>();
   if (!request_id.empty()) {
     json["requestId"] = request_id;
@@ -1290,7 +1390,7 @@ Operation NukiHubComponent::make_fingerprint_operation_() {
     }
     std::vector<FingerprintEntry> entries;
     this->ble()->get_fingerprint_entries(&entries);
-    JsonDocument doc;
+    JsonDocument doc(json_memory());
     JsonArray list = doc.to<JsonArray>();
     for (const auto &entry : entries) {
       JsonObject json = list.add<JsonObject>();
@@ -1387,7 +1487,7 @@ void NukiHubComponent::publish_keypad_entry_discovery_(uint16_t code_id, const s
     return;
   }
   const std::string base = this->topic_prefix_ + "/" + this->kind();
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonObject json = doc.to<JsonObject>();
   json["unique_id"] = std::string(uid) + "_" + object;
   json["name"] = "Keypad - " + name + " - " + to_string(code_id);
@@ -1459,7 +1559,7 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
   const std::string base = this->topic_prefix_ + "/" + this->kind();
 
   auto announce = [&](const char *component, const char *object, const std::function<void(JsonObject)> &fill) {
-    JsonDocument doc;
+    JsonDocument doc(json_memory());
     JsonObject json = doc.to<JsonObject>();
     json["unique_id"] = std::string(uid) + "_" + object;
     json["object_id"] = std::string(uid) + "_" + object;
@@ -1531,6 +1631,29 @@ void NukiHubComponent::publish_discovery_(uint32_t nuki_id, const std::string &n
     json["name"] = "State";
     json["state_topic"] = base + "/state";
   });
+  // Settings: read from the configuration topics, written through configuration/action
+  for (const auto &setting : this->discovery_settings()) {
+    const bool number = setting.max > setting.min;
+    announce(number ? "number" : "switch", setting.key, [&](JsonObject json) {
+      const std::string key = setting.key;
+      json["name"] = setting.name;
+      json["entity_category"] = "config";
+      json["state_topic"] = base + (setting.advanced ? "/configuration/advancedJson" : "/configuration/basicJson");
+      json["value_template"] = "{{ value_json." + key + " }}";
+      json["command_topic"] = base + "/configuration/action";
+      if (number) {
+        json["min"] = setting.min;
+        json["max"] = setting.max;
+        json["mode"] = "box";
+        json["command_template"] = "{\"" + key + "\":\"{{ value | int }}\"}";
+      } else {
+        json["state_on"] = "1";
+        json["state_off"] = "0";
+        json["payload_on"] = "{\"" + key + "\":\"1\"}";
+        json["payload_off"] = "{\"" + key + "\":\"0\"}";
+      }
+    });
+  }
   ESP_LOGI(TAG, "Announced the %s to Home Assistant on %s", this->kind(), this->discovery_prefix_.c_str());
 #endif
 }
@@ -1568,7 +1691,7 @@ Operation NukiHubComponent::make_auth_operation_() {
 }
 
 void NukiHubComponent::publish_auth_() {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   char dt[20];
   char tod[6];
@@ -1613,7 +1736,7 @@ void NukiHubComponent::handle_auth_action_(const std::string &payload) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json.is<JsonObjectConst>()) {
     answer("invalidJson");
     return;
@@ -1624,8 +1747,73 @@ void NukiHubComponent::handle_auth_action_(const std::string &payload) {
   }
   const std::string action = json["action"].as<const char *>();
   const uint32_t auth_id = json["authId"].as<unsigned int>();
+  if (action == "add") {
+    // A new authorization is permanent access to the Nuki device for whoever holds its key:
+    // only with authorization_add: true
+    if (!this->authorization_add_) {
+      answer("addNotSupported");
+      return;
+    }
+    if (!json["name"].is<const char *>() || strlen(json["name"].as<const char *>()) == 0) {
+      answer("noNameSet");
+      return;
+    }
+    NewAuthorizationEntry e{};
+    strncpy((char *) e.name, json["name"].as<const char *>(), sizeof(e.name));
+    const std::string type = json["type"] | "app";
+    if (type == "app") {
+      e.idType = 0;
+    } else if (type == "bridge") {
+      e.idType = 1;
+    } else if (type == "fob") {
+      e.idType = 2;
+    } else if (type == "keypad") {
+      e.idType = 3;
+    } else {
+      answer("invalidType");
+      return;
+    }
+    const std::string key = json["sharedKey"] | "";
+    const bool generated = key.empty();
+    if (generated) {
+      esp_fill_random(e.sharedKey, sizeof(e.sharedKey));
+    } else if (key.size() != 2 * sizeof(e.sharedKey) || !parse_hex(key, e.sharedKey, sizeof(e.sharedKey))) {
+      answer("invalidSharedKey");
+      return;
+    }
+    e.remoteAllowed = json["remoteAllowed"].as<unsigned int>() == 1 ? 1 : 0;
+    const std::string name = json["name"].as<const char *>();
+    std::string key_hex;
+    for (uint8_t byte : e.sharedKey) {
+      char pair[3];
+      snprintf(pair, sizeof(pair), "%02x", byte);
+      key_hex += pair;
+    }
+    Operation add;
+    add.name = "add authorization";
+    add.step = [this, e] { return this->ble()->add_authorization_entry(e); };
+    add.done = [this, request_id, received_at, name, key_hex, generated](CmdResult result) {
+      if (result == CmdResult::Success) {
+        // The key is what the new client needs; one made here is told once, not retained
+        JsonDocument doc(json_memory());
+        doc["name"] = name;
+        if (!request_id.empty()) {
+          doc["requestId"] = request_id;
+        }
+        if (generated) {
+          doc["sharedKey"] = key_hex;
+        }
+        this->publish_json_("/authorization/added", doc, false);
+      }
+      this->answer_command_("/authorization", request_id, "add", result_to_string(result), result == CmdResult::Failed,
+                            received_at);
+      this->want_auth_ = true;
+    };
+    this->enqueue(std::move(add));
+    return;
+  }
   if (action != "update" && action != "delete") {
-    answer(action == "add" ? "addNotSupported" : "invalidAction");
+    answer("invalidAction");
     return;
   }
   if (auth_id == 0) {
@@ -1774,7 +1962,7 @@ void NukiHubComponent::publish_log_marker_() {
 }
 
 void NukiHubComponent::publish_event_(const char *type, JsonObject entry) {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonObject json = doc.to<JsonObject>();
   for (JsonPair field : entry) {
     json[field.key()] = field.value();
@@ -1807,7 +1995,7 @@ void NukiHubComponent::note_invalid_code_() {
   }
   ESP_LOGW(TAG, "%u wrong keypad codes within %" PRIu32 " seconds", (unsigned) this->invalid_code_times_.size(),
            this->invalid_code_alert_window_);
-  JsonDocument json;
+  JsonDocument json(json_memory());
   json["count"] = this->invalid_code_times_.size();
   json["windowSeconds"] = this->invalid_code_alert_window_;
   this->publish_json_("/event/invalidCodes", json, false);
@@ -1945,7 +2133,7 @@ std::string request_id(const std::string &payload) {
   if (payload.find("requestId") == std::string::npos) {
     return "";
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload)) {
     return "";
   }

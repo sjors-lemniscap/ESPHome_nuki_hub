@@ -108,7 +108,7 @@ void NukiHubLock::publish_state_() {
     this->publish_("/binaryState", binary);
   }
 
-  JsonDocument json;
+  JsonDocument json(json_memory());
   char time[20];
   json["lock_state"] = lock_state;
   json["lockngo_state"] = s.lockNgoTimer != 255 ? s.lockNgoTimer : 0;
@@ -136,7 +136,7 @@ void NukiHubLock::publish_state_() {
   json["auth_name"] = this->last_auth_name_;
   this->publish_json_("/json", json);
 
-  JsonDocument battery;
+  JsonDocument battery(json_memory());
   battery["level"] = this->nuki_lock_.get_battery_perc();
   battery["critical"] = this->nuki_lock_.is_battery_critical() ? "1" : "0";
   battery["charging"] = this->nuki_lock_.is_battery_charging() ? "1" : "0";
@@ -272,7 +272,7 @@ Operation NukiHubLock::make_config_operation() {
 
 void NukiHubLock::publish_config_() {
   const Config &c = this->config_;
-  JsonDocument json;
+  JsonDocument json(json_memory());
   char buf[40];
   snprintf(buf, sizeof(buf), "%" PRIx32, c.nukiId);
   json["nukiID"] = buf;
@@ -325,7 +325,7 @@ void NukiHubLock::publish_config_() {
 
 void NukiHubLock::publish_advanced_config_() {
   const AdvancedConfig &c = this->advanced_config_;
-  JsonDocument json;
+  JsonDocument json(json_memory());
   char tod[6];
   json["totalDegrees"] = c.totalDegrees;
   json["unlockedPositionOffsetDegrees"] = c.unlockedPositionOffsetDegrees;
@@ -362,7 +362,7 @@ void NukiHubLock::publish_advanced_config_() {
 }
 
 void NukiHubLock::handle_config_action(const std::string &payload) {
-  JsonDocument result;
+  JsonDocument result(json_memory());
   auto answer = [this, &result] { this->publish_json_("/configuration/commandResult", result); };
 
   if (!this->config_valid_ || !this->advanced_config_valid_) {
@@ -375,7 +375,7 @@ void NukiHubLock::handle_config_action(const std::string &payload) {
     answer();
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json.is<JsonObjectConst>()) {
     result["general"] = "invalidJson";
     answer();
@@ -622,7 +622,7 @@ Operation NukiHubLock::make_battery_operation() {
       return;
     }
     const BatteryReport &b = this->battery_report_;
-    JsonDocument json;
+    JsonDocument json(json_memory());
     json["batteryDrain"] = b.batteryDrain;
     json["batteryVoltage"] = b.batteryVoltage / 1000.0;
     json["critical"] = (b.criticalBatteryState & 1) ? 1 : 0;
@@ -692,7 +692,7 @@ Operation NukiHubLock::make_time_control_operation() {
 }
 
 void NukiHubLock::publish_time_control_() {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   char tod[6];
   for (const auto &entry : this->time_control_entries_) {
@@ -718,7 +718,7 @@ void NukiHubLock::handle_time_control_action(const std::string &payload) {
     answer(this->security_pin_ == 0 ? "noPinSet" : "noValidPinSet");
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json.is<JsonObjectConst>()) {
     answer("invalidJson");
     return;
@@ -993,14 +993,14 @@ void NukiHubLock::process_log_() {
     this->publish_log_marker_();
   }
 
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   const size_t first_listed =
       this->log_batch_.size() > this->max_log_entries_ ? this->log_batch_.size() - this->max_log_entries_ : 0;
 
   for (size_t i = 0; i < this->log_batch_.size(); i++) {
     const LogEntry &log = this->log_batch_[i];
-    JsonDocument single;
+    JsonDocument single(json_memory());
     JsonObject entry = single.to<JsonObject>();
     this->log_entry_to_json_(log, entry);
 

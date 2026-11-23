@@ -33,7 +33,7 @@ template<typename... Ts> class NukiHubCommandAction : public Action<Ts...>, publ
 class NukiHubMessageTrigger : public Trigger<std::string, std::string> {
  public:
   explicit NukiHubMessageTrigger(NukiHubComponent *parent) {
-    parent->add_on_message_callback([this](std::string topic, std::string payload) { this->trigger(topic, payload); });
+    parent->add_on_message_callback([this](const std::string &topic, const std::string &payload) { this->trigger(topic, payload); });
   }
   void set_topic(const std::string &topic) { this->topic_ = topic; }
 

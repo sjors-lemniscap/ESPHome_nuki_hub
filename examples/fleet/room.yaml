@@ -3,7 +3,8 @@
 # (Wi-Fi, broker, OTA password) and per room the values tools/nuki_hub_pairing.py writes.
 
 esphome:
-  name: nuki-${room}
+  # Letters, digits and hyphens: a room named room_u1 is nuki-room-u1 here
+  name: ${host}
 
 esp32:
   board: ${board}
@@ -51,10 +52,19 @@ mqtt:
     payload: offline
     retain: true
 
+# For a client that talks to the room without the broker (api_transport), and Home Assistant
+api:
+  encryption:
+    key: ${api_key}
+  custom_services: true
+  homeassistant_services: true
+  reboot_timeout: 0s
+
 nuki_hub:
   - id: nuki
     type: ${device}
     topic_prefix: ${room}
+    api_transport: true
     security_pin: ${pin}
     time_id: sntp_time
     update_time: true

@@ -73,6 +73,7 @@ CONF_ACTION = "action"
 CONF_PAIRING_MODE = "pairing_mode"
 CONF_ON_MESSAGE = "on_message"
 CONF_API_TRANSPORT = "api_transport"
+CONF_AUTHORIZATION_ADD = "authorization_add"
 
 TYPE_OPENER = "opener"
 TYPE_LOCK = "lock"
@@ -172,6 +173,8 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
             # The topics as an action and an event of the ESPHome API, see docs/nuki_hub.md
             cv.Optional(CONF_API_TRANSPORT, default=False): cv.boolean,
+            # Lets a client create authorizations: permanent access for whoever gets the key
+            cv.Optional(CONF_AUTHORIZATION_ADD, default=False): cv.boolean,
             # true for Home Assistant's default prefix, or the prefix itself
             cv.Optional(CONF_HOMEASSISTANT_DISCOVERY, default=False): cv.Any(cv.boolean, _validate_topic_prefix),
             cv.Optional(CONF_BLE_DISCONNECT_TIMEOUT, default="2s"): cv.All(
@@ -311,6 +314,7 @@ async def to_code(config):
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
+    cg.add(var.set_authorization_add(config[CONF_AUTHORIZATION_ADD]))
     if config[CONF_API_TRANSPORT]:
         cg.add_define("USE_NUKI_HUB_API")
         cg.add(var.set_api_transport(True))

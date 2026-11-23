@@ -41,6 +41,7 @@ PRELUDE = r'''
 #include <ArduinoJson.h>
 
 namespace esphome::nuki_hub {
+inline ArduinoJson::Allocator *json_memory() { return ArduinoJson::detail::DefaultAllocator::instance(); }
 namespace util {
 void date_time(char *out, int year, int month, int day, int hour, int minute, int second);
 void time_of_day(char *out, int hour, int minute);

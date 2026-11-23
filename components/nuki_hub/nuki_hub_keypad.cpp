@@ -77,7 +77,7 @@ void keypad_entry_to_json(const KeypadEntry &entry, JsonObject json, bool includ
 }
 
 void NukiHubComponent::publish_keypad_() {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonArray list = doc.to<JsonArray>();
   for (const auto &entry : this->keypad_entries_) {
     keypad_entry_to_json(entry, list.add<JsonObject>(), this->keypad_publish_code_);
@@ -97,7 +97,7 @@ void NukiHubComponent::publish_keypad_entries_() {
   char topic[40];
   for (const auto &entry : this->keypad_entries_) {
     current.push_back(entry.codeId);
-    JsonDocument doc;
+    JsonDocument doc(json_memory());
     JsonObject json = doc.to<JsonObject>();
     keypad_entry_to_json(entry, json, this->keypad_publish_code_);
     std::string out;
@@ -301,7 +301,7 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
   }
   if (executed && result == CmdResult::Success && code_id != 0) {
     // The one entry that changed, for clients that keep a copy of the list
-    JsonDocument doc;
+    JsonDocument doc(json_memory());
     JsonObject json = doc.to<JsonObject>();
     json["change"] = cmd.action == "add" ? "added" : (cmd.action == "delete" ? "deleted" : "updated");
     json["codeId"] = code_id;
@@ -341,7 +341,7 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
 
   if (cmd.phase == KeypadCommand::Phase::Parse) {
     if (cmd.timeout_ms == 0 && cmd.payload.find("timeoutMs") != std::string::npos) {
-      JsonDocument probe;
+      JsonDocument probe(json_memory());
       if (!deserializeJson(probe, cmd.payload)) {
         cmd.timeout_ms = probe["timeoutMs"].as<unsigned int>();
       }
@@ -361,7 +361,7 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
       return refuse(this->config_valid() ? "keypadNotAvailable" : "configNotReady");
     }
 
-    JsonDocument json;
+    JsonDocument json(json_memory());
     if (deserializeJson(json, cmd.payload) || !json.is<JsonObjectConst>()) {
       return refuse("invalidJson");
     }
@@ -637,7 +637,7 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
 // --------------------------------------------------------------------------------------------
 
 void NukiHubComponent::finish_keypad_batch_(KeypadBatch &batch) {
-  JsonDocument doc;
+  JsonDocument doc(json_memory());
   JsonObject json = doc.to<JsonObject>();
   if (!batch.request_id.empty()) {
     json["requestId"] = batch.request_id;
@@ -692,7 +692,7 @@ void NukiHubComponent::handle_keypad_batch_(const std::string &payload) {
     refuse("notPaired");
     return;
   }
-  JsonDocument json;
+  JsonDocument json(json_memory());
   if (deserializeJson(json, payload) || !json["commands"].is<JsonArrayConst>()) {
     refuse("invalidJson");
     return;
@@ -747,7 +747,7 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
     refuse(this->config_valid() ? "keypadNotAvailable" : "configNotReady");
     return;
   }
-  auto wanted = std::make_shared<JsonDocument>();
+  auto wanted = std::make_shared<JsonDocument>(json_memory());
   if (deserializeJson(*wanted, payload) || !(*wanted)["entries"].is<JsonArrayConst>()) {
     refuse("invalidJson");
     return;
@@ -798,7 +798,7 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
         keep = keep || util::as_text(entry["name"]) == name;
       }
       if (!keep) {
-        JsonDocument command;
+        JsonDocument command(json_memory());
         command["action"] = "delete";
         command["codeId"] = existing.codeId;
         std::string text;
@@ -816,7 +816,7 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
           break;
         }
       }
-      JsonDocument command;
+      JsonDocument command(json_memory());
       for (JsonPairConst field : entry.as<JsonObjectConst>()) {
         command[field.key()] = field.value();
       }
@@ -883,12 +883,18 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
       commands.push_back(std::move(text));
     }
 
+    // More than one batch holds: this sync does the first part and says how much is left,
+    // the same sync sent again goes on from there
+    const size_t remaining = commands.size() > MAX_BATCH ? commands.size() - MAX_BATCH : 0;
     auto summary = [&](JsonObject json) {
       json["prefix"] = prefix;
       json["adds"] = adds;
       json["updates"] = updates;
       json["deletes"] = deletes;
       json["unchanged"] = unchanged;
+      if (remaining > 0) {
+        json["remaining"] = remaining;
+      }
     };
     const bool dry_run = (*wanted)["dryRun"].as<bool>();
     if (commands.empty() || dry_run) {
@@ -896,9 +902,8 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
                             summary);
       return;
     }
-    if (commands.size() > MAX_BATCH) {
-      this->publish_result_("/keypad/syncResult", request_id, "", "tooManyCommands", false, received_at, summary);
-      return;
+    if (remaining > 0 && !dry_run) {
+      commands.resize(MAX_BATCH);
     }
     auto batch = this->start_keypad_batch_(request_id, "/keypad/syncResult", commands, received_at);
     if (!batch) {
@@ -959,7 +964,7 @@ void NukiHubComponent::delete_expired_keypad_entries_() {
       continue;
     }
     ESP_LOGI(TAG, "Keypad entry %u '%s' ran out, deleting it", entry.codeId, name.c_str());
-    JsonDocument command;
+    JsonDocument command(json_memory());
     command["action"] = "delete";
     command["codeId"] = entry.codeId;
     // Looked at again when the delete is about to happen
