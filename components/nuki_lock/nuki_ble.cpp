@@ -1499,6 +1499,7 @@ void NukiBle::notify_callback(uint16_t handle, uint8_t* recData, uint16_t length
     if (this->crc_check_oke_) {
       unsigned char plainData[200];
       memcpy(plainData, &recData[2], length - 4);
+      this->answer_seen_ = true;
       this->handle_return_message((Command)returnCode, plainData, length - 4);
     }
   } else if (isUsdioHandle || (isGdioUltra && this->recieve_encrypted_)) {
@@ -1534,6 +1535,9 @@ void NukiBle::notify_callback(uint16_t handle, uint8_t* recData, uint16_t length
       memcpy(&returnCode, &decrData[4], 2);
       unsigned char payload[sizeof(decrData) - 8];
       memcpy(&payload, &decrData[6], sizeof(payload));
+      if ((Command) returnCode != Command::Challenge) {
+        this->answer_seen_ = true;
+      }
       this->handle_return_message((Command)returnCode, payload, sizeof(payload));
     }
   }
@@ -1736,8 +1740,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
 }
 
 void NukiBle::prefetch_challenge(bool refresh) {
-  if (!this->challenge_prefetch_active() || this->pairing_mode_ || !this->is_paired_ ||
-      this->nuki_command_state_ != CommandState::Idle || !(this->connected() && this->notify_registered_)) {
+  if (this->nuki_command_state_ != CommandState::Idle) {
     return;
   }
   const int64_t now = esp_timer_get_time() / 1000;
@@ -1749,12 +1752,20 @@ void NukiBle::prefetch_challenge(bool refresh) {
   }
   // The mark of the challenge this one replaces must not be taken for its arrival
   this->last_msg_code_received_ = Command::Empty;
+  this->request_challenge_ahead_();
+}
+
+void NukiBle::request_challenge_ahead_() {
+  if (!this->challenge_prefetch_active() || this->pairing_mode_ || !this->is_paired_ ||
+      !(this->connected() && this->notify_registered_)) {
+    return;
+  }
   unsigned char payload[sizeof(Command)] = {0x04, 0x00};  // challenge
   this->challenge_prefetch_sending_ = true;
   const bool sent = this->send_encrypted_message(Command::RequestData, payload, sizeof(Command));
   this->challenge_prefetch_sending_ = false;
   this->challenge_prefetch_ = sent ? ChallengePrefetch::Sent : ChallengePrefetch::None;
-  this->challenge_prefetch_at_ = now;
+  this->challenge_prefetch_at_ = esp_timer_get_time() / 1000;
 }
 
 // Opens the connection like BLEClientBase::connect(), with one difference: while it waits

@@ -25,11 +25,13 @@ these topics.
 
 | Operation | average | median | slowest |
 | --- | --- | --- | --- |
-| Keypad add (the first one opens the connection) | 223 ms | 149 ms | 902 ms |
-| Keypad update | 129 ms | 110 ms | 166 ms |
-| Keypad delete | 109 ms | 104 ms | 146 ms |
+| Keypad add | 131 ms | 127 ms | 155 ms |
+| Keypad update | 130 ms | 111 ms | 195 ms |
+| Keypad delete | 111 ms | 104 ms | 152 ms |
 
-A little faster than over MQTT, which has the broker in between.
+A little faster than over MQTT, which has the broker in between. An event the API has no
+room for at that moment (it would drop it) waits in the component and is sent in order: in
+135 commands every result arrived.
 
 ## Many commands
 
@@ -83,8 +85,14 @@ done (`challenge_prefetch`), and is there when the next one arrives:
 | Challenge asked for ahead | 148 ms | 75 ms |
 
 The Opener takes a challenge that is seconds old, and one with a status read in between. In
-a batch the commands follow each other without a pause, so there is nothing to ask ahead in:
-a batch of 20 stays at 2.4 to 2.5 s.
+a batch the commands follow each other without a pause: there the question for the next
+challenge is sent right behind each command, before its answer. That gains little, a batch
+of 20 stays at 2.4 to 2.5 s (100 to 140 ms per command on the ESP32, logged per command at
+debug level): what remains is the Opener storing the change and two exchanges per command.
+
+A sync right after another one, or after a list read, does not read the list again: 0.1 s
+instead of 1.2 s when there is nothing to do, and one read less for every part of a sync in
+several parts.
 
 ## The first command after a pause
 
@@ -96,6 +104,7 @@ ESP32 hears it. Time on the ESP32 for a keypad update, with `tests/rig` probes:
 | --- | --- | --- |
 | Before: the radio listened 30 ms of every 60 ms for the advertisement | 1180 ms | 720-3110 ms |
 | Listening without gaps | 640 ms | 240-1130 ms |
+| Within `connection_linger` (15 s) of the command before | 77 ms | 67-77 ms |
 | Connection held open (`keep_connected` or `connection/hold`) | 70 ms | 67-81 ms |
 
 Finding the services again is not part of it: the stack remembers them, that step takes no

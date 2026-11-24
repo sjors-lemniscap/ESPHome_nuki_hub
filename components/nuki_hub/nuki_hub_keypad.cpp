@@ -41,6 +41,7 @@ Operation NukiHubComponent::make_keypad_operation_() {
     std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
               [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
     this->keypad_cache_valid_ = true;
+    this->keypad_cache_at_ = millis();
     ESP_LOGI(TAG, "%s keypad codes: %u", this->kind(), (unsigned) this->keypad_entries_.size());
     this->publish_keypad_();
     this->delete_expired_keypad_entries_();
@@ -288,6 +289,9 @@ void NukiHubComponent::keypad_command_done_(KeypadCommand &cmd, CmdResult result
           e.allowedUntilTimeMin = cmd.update.allowedUntilTimeMin;
         }
       }
+    }
+    if (result == CmdResult::Success && this->keypad_cache_valid_) {
+      this->keypad_cache_at_ = millis();
     }
     // Read the list back from the device once the commands are through
     if (result != CmdResult::Success && result != CmdResult::Failed) {
@@ -563,6 +567,7 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
       std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
                 [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
       this->keypad_cache_valid_ = true;
+      this->keypad_cache_at_ = millis();
       existing = this->find_keypad_entry_(cmd.code_id);
     }
     if (existing == nullptr) {
@@ -633,6 +638,7 @@ CmdResult NukiHubComponent::keypad_command_step_(KeypadCommand &cmd) {
       std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
                 [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
       this->keypad_cache_valid_ = true;
+      this->keypad_cache_at_ = millis();
       for (const auto &entry : this->keypad_entries_) {
         const bool same_window =
             entry.timeLimited == cmd.add.timeLimited &&
@@ -820,17 +826,30 @@ void NukiHubComponent::handle_keypad_sync_(const std::string &payload) {
 
   Operation op;
   op.name = "read keypad codes for sync";
-  op.step = [this] { return this->ble()->retrieve_keypad_entries(0, this->max_keypad_entries_); };
-  op.done = [this, wanted, prefix, request_id, received_at](CmdResult result) {
+  // A list read (or brought up to date by the commands since) seconds ago is not read again:
+  // a sync in several parts would read it for every part
+  auto fresh = std::make_shared<bool>(false);
+  op.step = [this, fresh] {
+    if (*fresh || (this->keypad_cache_valid_ && this->keypad_commands_pending_ == 0 &&
+                   millis() - this->keypad_cache_at_ < 5000)) {
+      *fresh = true;
+      return CmdResult::Success;
+    }
+    return this->ble()->retrieve_keypad_entries(0, this->max_keypad_entries_);
+  };
+  op.done = [this, wanted, prefix, request_id, received_at, fresh](CmdResult result) {
     if (result != CmdResult::Success) {
       this->publish_result_("/keypad/syncResult", request_id, "", result_to_string(result),
                             result == CmdResult::Failed, received_at);
       return;
     }
-    this->ble()->get_keypad_entries(&this->keypad_entries_);
-    std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
-              [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
-    this->keypad_cache_valid_ = true;
+    if (!*fresh) {
+      this->ble()->get_keypad_entries(&this->keypad_entries_);
+      std::sort(this->keypad_entries_.begin(), this->keypad_entries_.end(),
+                [](const KeypadEntry &a, const KeypadEntry &b) { return a.codeId < b.codeId; });
+      this->keypad_cache_valid_ = true;
+      this->keypad_cache_at_ = millis();
+    }
 
     std::vector<std::string> commands;
     size_t adds = 0, updates = 0, deletes = 0, unchanged = 0;

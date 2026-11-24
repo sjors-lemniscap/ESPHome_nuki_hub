@@ -175,6 +175,8 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
 #endif
   void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
   void set_keep_connected(bool enable) { this->keep_connected_ = enable; }
+  void set_connection_linger(uint32_t ms) { this->connection_linger_ = ms; }
+  void set_mqtt_commands(bool enable) { this->mqtt_commands_ = enable; }
   void set_challenge_prefetch(bool enable) { this->challenge_prefetch_ = enable; }
   void set_fast_connection(bool enabled) { this->fast_connection_ = enabled; }
   void set_bluetooth_watchdog(uint32_t seconds) { this->bluetooth_watchdog_ = seconds; }
@@ -373,6 +375,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool api_transport_{false};
   bool authorization_add_{false};
   void attach_api_();
+  void flush_api_();
   bool keypad_topic_per_entry_{false};
   std::vector<uint16_t> keypad_published_ids_;
   std::map<uint16_t, uint32_t> keypad_published_hashes_;
@@ -457,6 +460,18 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   bool hold_active_{false};
   uint32_t hold_until_{0};
   uint32_t last_keep_alive_{0};
+  uint32_t last_op_end_{0};
+  /// After a command from a client the connection stays open this long, for the next one
+  uint32_t connection_linger_{15000};
+  bool linger_active_{false};
+  bool client_work_{false};
+  uint32_t linger_until_{0};
+  void arm_linger_();
+  bool connection_held_() const { return this->keep_connected_ || this->hold_active_ || this->linger_active_; }
+  /// Commands are taken from the broker; without it only over the API
+  bool mqtt_commands_{true};
+  /// When the list of keypad codes was last known to match the device
+  uint32_t keypad_cache_at_{0};
   bool challenge_prefetch_{false};
   void service_connection_hold_(uint32_t now);
   bool fast_connection_{true};

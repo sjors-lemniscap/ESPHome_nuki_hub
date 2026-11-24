@@ -129,6 +129,23 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     }
     /// Asks for the challenge of the next command. `refresh` replaces one already there.
     void prefetch_challenge(bool refresh = false);
+    /// A change of one entry: nothing more comes from the device after its answer (a list
+    /// request is followed by its entries), and in a batch the next change follows at once
+    static bool is_change_command(Command command) {
+      switch (command) {
+        case Command::AddKeypadCode:
+        case Command::UpdateKeypadCode:
+        case Command::RemoveKeypadCode:
+        case Command::UpdateAuthorization:
+        case Command::RemoveUserAuthorization:
+        case Command::AddTimeControlEntry:
+        case Command::UpdateTimeControlEntry:
+        case Command::RemoveTimeControlEntry:
+          return true;
+        default:
+          return false;
+      }
+    }
     /// Keeps the connection from being closed for being idle, for another timeout
     void hold_connection() { this->extend_disconnect_timeout(); }
     /// The interval of the connection as it is now, in units of 1.25 ms (0: not known)
@@ -522,7 +539,31 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     bool status_accepted_seen_ = false;
     bool status_complete_seen_ = false;
     bool error_report_seen_ = false;
+    /// Anything but a challenge arrived since the command went out
+    bool answer_seen_ = false;
+    /// The last command was refused by the device, on a connection that is fine
+    bool link_ok_after_failure_ = false;
+    /// The device answered a command with an error report: the connection is closed only
+    /// for the errors that say something about it (not authorized, wrong PIN or challenge,
+    /// a message that arrived broken). A refused code or a busy device leave it open for
+    /// the next command.
+    void after_refusal_() {
+      switch (this->error_code_) {
+        case 0x20:
+        case 0x21:
+        case 0x22:
+        case 0xFD:
+        case 0xFE:
+        case 0xFF:
+          this->disconnect();
+          break;
+        default:
+          this->link_ok_after_failure_ = true;
+          break;
+      }
+    }
     void clear_seen_responses_() {
+      this->answer_seen_ = false;
       this->status_accepted_seen_ = false;
       this->status_complete_seen_ = false;
       this->error_report_seen_ = false;
@@ -713,6 +754,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     bool challenge_prefetch_used_{false};
     uint8_t challenge_prefetch_strikes_{0};
     int64_t challenge_prefetch_at_{0};
+    void request_challenge_ahead_();
 
     bool is_paired_ = false;
 
@@ -828,26 +870,14 @@ CmdResult NukiBle::execute_action(const TDeviceAction action) {
                this->challenge_prefetch_strikes_ >= 2 ? ", asking ahead is off until the restart" : "");
     }
   }
-  if (result == CmdResult::Success) {
-    // After a change nothing more comes from the device (a list request is followed by its
-    // entries), and in a batch the next change follows at once
-    switch (action.command) {
-      case Command::AddKeypadCode:
-      case Command::UpdateKeypadCode:
-      case Command::RemoveKeypadCode:
-      case Command::UpdateAuthorization:
-      case Command::RemoveUserAuthorization:
-      case Command::AddTimeControlEntry:
-      case Command::UpdateTimeControlEntry:
-      case Command::RemoveTimeControlEntry:
-        this->prefetch_challenge();
-        break;
-      default:
-        break;
-    }
+  if (result == CmdResult::Success && is_change_command(action.command)) {
+    this->prefetch_challenge();
   }
-  if (result != CmdResult::Working && (result == CmdResult::Error || result == CmdResult::Failed)) {
+  if (result == CmdResult::Error || (result == CmdResult::Failed && !this->link_ok_after_failure_)) {
     this->disconnect();
+  }
+  if (result != CmdResult::Working) {
+    this->link_ok_after_failure_ = false;
   }
   return result;
 }
@@ -867,6 +897,7 @@ CmdResult NukiBle::cmd_state_machine(const TDeviceAction action) {
         ESP_LOGD(HPP_TAG, "Sending command: %u", (unsigned int)action.command);
       }
       this->last_msg_code_received_ = Command::Empty;
+      this->clear_seen_responses_();
 
       if (this->send_encrypted_message(Command::RequestData, action.payload, action.payloadLen)) {
         this->time_now_ = (esp_timer_get_time() / 1000);
@@ -896,26 +927,26 @@ CmdResult NukiBle::cmd_state_machine(const TDeviceAction action) {
         this->disconnect();
         this->nuki_command_state_ = CommandState::Idle;
         return CmdResult::TimeOut;
-      } else if (this->last_msg_code_received_ != Command::ErrorReport && this->last_msg_code_received_ != Command::Empty) {
+      } else if (this->answer_seen_ && !this->error_report_seen_) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command done");
         }
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Success;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ != 69) {
+      } else if (this->error_report_seen_ && this->error_code_ != 69) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command failed");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Failed;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ == 69) {
+      } else if (this->error_report_seen_ && this->error_code_ == 69) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command failed: lock busy");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Lock_Busy;
@@ -1001,6 +1032,7 @@ CmdResult NukiBle::cmd_chall_state_machine(const TDeviceAction action, const boo
       }
       this->last_msg_code_received_ = Command::Empty;
       this->crc_check_oke_ = false;
+      this->clear_seen_responses_();
       //add received challenge nonce to payload
       uint8_t payloadLen = action.payloadLen + sizeof(this->challenge_nonce_k_);
       if (sendPinCode) {
@@ -1024,6 +1056,11 @@ CmdResult NukiBle::cmd_chall_state_machine(const TDeviceAction action, const boo
       if (this->send_encrypted_message(action.command, payload, payloadLen)) {
         this->time_now_ = (esp_timer_get_time() / 1000);
         this->nuki_command_state_ = CommandState::CmdSent;
+        if (is_change_command(action.command)) {
+          // The question for the next challenge follows the command at once, it does not
+          // wait for this one's answer
+          this->request_challenge_ahead_();
+        }
       } else if (!(this->connected() && this->notify_registered_)) {
         // Connection not fully ready yet (covers the whole CONNECTING/CONNECTED/ESTABLISHED
         // window until notify-subscription confirms, not just CONNECTING) - retry next call
@@ -1050,23 +1087,23 @@ CmdResult NukiBle::cmd_chall_state_machine(const TDeviceAction action, const boo
         this->disconnect();
         this->nuki_command_state_ = CommandState::Idle;
         return CmdResult::TimeOut;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ != 69) {
+      } else if (this->error_report_seen_ && this->error_code_ != 69) {
         if (this->debug_nuki_communication_) {
             ESP_LOGD(HPP_TAG, "Sending command failed");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Failed;
-      } else if (this->last_msg_code_received_ == Command::ErrorReport && this->error_code_ == 69) {
+      } else if (this->error_report_seen_ && this->error_code_ == 69) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command failed: lock busy");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Lock_Busy;
-      } else if (this->crc_check_oke_) {
+      } else if (this->answer_seen_) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Data received");
         }
@@ -1194,7 +1231,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
           ESP_LOGD(HPP_TAG, "Command refused");
         }
         const bool busy = this->error_code_ == 69;
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return busy ? CmdResult::Lock_Busy : CmdResult::Failed;
@@ -1226,7 +1263,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
         if (this->debug_nuki_communication_) {
             ESP_LOGD(HPP_TAG, "Sending command failed");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Failed;
@@ -1234,7 +1271,7 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
         if (this->debug_nuki_communication_) {
           ESP_LOGD(HPP_TAG, "Command failed: lock busy");
         }
-        this->disconnect();
+        this->after_refusal_();
         this->nuki_command_state_ = CommandState::Idle;
         this->last_msg_code_received_ = Command::Empty;
         return CmdResult::Lock_Busy;

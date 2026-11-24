@@ -5,6 +5,9 @@
 #include "esphome/core/log.h"
 #include "esphome/core/version.h"
 #include "esphome/components/network/util.h"
+#ifdef USE_NUKI_HUB_API
+#include "esphome/components/api/api_server.h"
+#endif
 
 #ifdef USE_MQTT
 #include "esphome/components/mqtt/mqtt_client.h"
@@ -441,7 +444,23 @@ bool NukiHubComponent::publish_hub_(const char *suffix, const std::string &paylo
 }
 
 void NukiHubComponent::subscribe_(const char *suffix, std::function<void(const std::string &)> &&callback) {
-  this->handlers_.push_back({suffix, false, std::move(callback)});
+  // Whoever sent one command often sends another: the connection stays for it. The answers
+  // the component writes on the same topics ("0", "--") are not commands.
+  this->handlers_.push_back({suffix, false, [this, callback = std::move(callback)](const std::string &payload) {
+                               if (!is_placeholder(payload) && payload != "0") {
+                                 this->arm_linger_();
+                               }
+                               callback(payload);
+                             }});
+}
+
+void NukiHubComponent::arm_linger_() {
+  if (this->connection_linger_ == 0) {
+    return;
+  }
+  this->linger_active_ = true;
+  this->client_work_ = true;
+  this->linger_until_ = millis() + this->connection_linger_;
 }
 
 void NukiHubComponent::subscribe_hub_(const char *suffix, std::function<void(const std::string &)> &&callback) {
@@ -516,9 +535,8 @@ void NukiHubComponent::register_handlers_() {
       return;
     }
     if (seconds == 0) {
-      if (this->hold_active_) {
-        this->hold_active_ = false;
-      }
+      this->hold_active_ = false;
+      this->linger_active_ = false;
       return;
     }
     this->hold_active_ = true;
@@ -672,6 +690,10 @@ void NukiHubComponent::on_mqtt_connected_() {
   if (!this->subscribed_) {
     this->subscribed_ = true;
     for (const auto &handler : this->handlers_) {
+      if (!this->mqtt_commands_) {
+        // The broker only gets to read: commands come over the API
+        break;
+      }
       const auto *callback = &handler.callback;
       mqtt::global_mqtt_client->subscribe(
           handler.hub ? this->hub_topic_(handler.suffix.c_str()) : this->topic_(handler.suffix.c_str()),
@@ -782,6 +804,10 @@ void NukiHubComponent::publish_maintenance_(bool initial) {
     // What every exchange of a command is counted in; 0 while there is no connection
     json["connectionIntervalMs"] = this->ble()->get_connection_interval() * 1.25f;
     json["maxMs"] = this->stat_max_ms_;
+    // Whether the next command finds the connection open, and whether it is kept open
+    json["connected"] = this->ble()->connected();
+    json["held"] = this->connection_held_();
+    json["challengeAhead"] = this->ble()->challenge_prefetch_active();
     this->publish_json_("/bluetoothJson", json);
   }
 #ifdef USE_WIFI
@@ -1083,7 +1109,8 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
       this->set_available_(false);
     }
   } else {
-    ESP_LOGD(TAG, "%s: success", this->op_.name);
+    ESP_LOGD(TAG, "%s: success (%u ms, started %u ms after the one before ended)", this->op_.name,
+             (unsigned) (millis() - this->op_started_), (unsigned) (this->op_started_ - this->last_op_end_));
   }
   if (this->op_retries_left_ != this->command_retries_ && this->op_.retry) {
     this->publish_int_("/retry", 0);
@@ -1097,6 +1124,7 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
     this->stat_failed_++;
   }
 
+  this->last_op_end_ = millis();
   this->op_active_ = false;
   this->op_retry_pending_ = false;
   this->next_op_time_ = millis() + 5;
@@ -1105,9 +1133,11 @@ void NukiHubComponent::finish_operation_(CmdResult result) {
   if (done) {
     done(result);
   }
-  if (result == CmdResult::Success) {
-    // The next command will want a challenge: ask for it while nothing else is going on
-    this->ble()->prefetch_challenge();
+  // The next command will want a challenge: ask for it while nothing else is going on
+  this->ble()->prefetch_challenge();
+  if (this->linger_active_ && this->client_work_) {
+    // Counted from the end of what the client asked for, not from when it asked
+    this->linger_until_ = millis() + this->connection_linger_;
   }
 }
 
@@ -1118,7 +1148,15 @@ void NukiHubComponent::service_connection_hold_(uint32_t now) {
     this->hold_active_ = false;
     this->publish_("/connection/hold", "0", false);
   }
-  if (!this->keep_connected_ && !this->hold_active_) {
+  if (this->linger_active_ && (int32_t) (now - this->linger_until_) >= 0) {
+    this->linger_active_ = false;
+  }
+  if (!this->op_active_ && this->queue_.empty() && this->keypad_commands_pending_ == 0) {
+    // What follows by itself (the list read back later, the state after an action) does not
+    // keep the connection any longer
+    this->client_work_ = false;
+  }
+  if (!this->connection_held_()) {
     return;
   }
   NukiBle *ble = this->ble();
@@ -1168,6 +1206,11 @@ void NukiHubComponent::loop() {
   }
   // With nothing to do a look ten times a second is enough; a command that arrived must not
   // wait for that
+#ifdef USE_NUKI_HUB_API
+  if (this->api_transport_) {
+    this->flush_api_();
+  }
+#endif
   const bool active = busy || !this->queue_.empty() || this->keypad_commands_pending_ > 0;
   if (now - this->last_loop_ < (active ? 2 : 100)) {
     return;

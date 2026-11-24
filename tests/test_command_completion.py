@@ -39,7 +39,18 @@ class NukiBle {
   bool send_encrypted_message(Command, unsigned char *, uint8_t) { return true; }
   bool connected() const { return true; }
   void disconnect() { disconnected = true; }
+  // As in nuki_ble.h: only an error about the connection itself closes it
+  void after_refusal_() {
+    if (error_code_ == 0x20 || error_code_ == 0x21 || error_code_ == 0x22 || error_code_ >= 0xFD) {
+      disconnect();
+    } else {
+      link_ok_after_failure_ = true;
+    }
+  }
+  bool link_ok_after_failure_ = false;
+  bool answer_seen_ = false;
   void clear_seen_responses_() {
+    answer_seen_ = false;
     status_accepted_seen_ = false;
     status_complete_seen_ = false;
     error_report_seen_ = false;
@@ -98,7 +109,9 @@ int main(int argc, char **argv) {
     ble.receive(Command::ErrorReport, scenario == "refused_busy" ? 69 : 1);
     const auto expected = scenario == "refused_busy" ? CmdResult::Lock_Busy : CmdResult::Failed;
     assert(ble.cmd_chall_acc_state_machine(action) == expected);
-    assert(ble.disconnected);
+    // The device answered: the connection is good for the next command
+    assert(!ble.disconnected);
+    assert(ble.link_ok_after_failure_);
     assert(ble.nuki_command_state_ == CommandState::Idle);
     return 0;
   }
@@ -164,8 +177,13 @@ int main(int argc, char **argv) {
     ble.receive(Command::ErrorReport, scenario == "busy" ? 69 : 1);
     const auto expected = scenario == "busy" ? CmdResult::Lock_Busy : CmdResult::Failed;
     assert(ble.cmd_chall_acc_state_machine(action) == expected);
-    assert(ble.disconnected);
+    assert(!ble.disconnected);
     assert(ble.nuki_command_state_ == CommandState::Idle);
+  } else if (scenario == "error_bad_nonce") {
+    // An error that says the connection's state is off: that one is closed
+    ble.receive(Command::ErrorReport, 0x22);
+    assert(ble.cmd_chall_acc_state_machine(action) == CmdResult::Failed);
+    assert(ble.disconnected);
   } else {
     assert(false && "Unknown test scenario");
   }
@@ -205,7 +223,7 @@ class CommandCompletionTests(unittest.TestCase):
         for scenario in (
             "wait_for_completion", "immediate_completion", "complete_without_accept",
             "unrelated_message", "duplicate_accept", "timeout", "error", "busy",
-            "accept_then_state", "accept_complete_between_steps", "refused", "refused_busy",
+            "accept_then_state", "accept_complete_between_steps", "refused", "refused_busy", "error_bad_nonce",
             "nothing_received",
         ):
             with self.subTest(scenario=scenario):

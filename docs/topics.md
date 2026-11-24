@@ -136,7 +136,13 @@ open from now on, `0` lets go of it. Without it the connection is closed two sec
 command, and the next command first waits for the device to advertise, a few hundred
 milliseconds and sometimes more. A client that knows commands are coming (someone opened the
 page with the door buttons) writes this first. Answered with `0` when the time is over. It
-costs the device battery while it lasts, see `keep_connected`.
+costs the device battery while it lasts, see `keep_connected`. After every command the
+connection stays for `connection_linger` (15 s) anyway. `bluetoothJson` says with `connected`
+and `held` whether the next command finds the connection open.
+
+A command the device refuses (a code it does not accept, an entry that does not exist) no
+longer closes the connection: only errors about the connection itself do (wrong PIN, not
+authorized, a refused challenge, a broken message).
 
 **`query/logRange`**: `{"from":100,"to":120,"requestId":"l1"}` reads log entries by index (at
 most 100). The answer on `logRange` has `from`, `to` and `entries`, or one of the refusals
