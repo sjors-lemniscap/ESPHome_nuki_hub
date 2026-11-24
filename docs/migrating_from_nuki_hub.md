@@ -88,6 +88,11 @@ not notice the difference: both firmwares use the same authorization.
 
 Do not run both at the same time on two ESP32s with the same pairing.
 
+Tried on the rig on 2026-11-24: a backup of the ESPHome flash taken first (`esptool
+read-flash 0 0x800000 esphome.bin`), Nuki Hub's backup written, Nuki Hub ran the booking
+system's checks with its pairing (20 of 20), the ESPHome image written back, and the same
+device passed its checks again without pairing anew.
+
 ## Home Assistant entities of Nuki Hub
 
 If Nuki Hub announced itself to Home Assistant, its discovery topics are still on the broker
