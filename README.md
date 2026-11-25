@@ -13,6 +13,18 @@ An ESPHome component that puts a Nuki **Opener** or **Smart Lock** on MQTT with 
 - The same topics over the ESPHome API for setups without a broker
 - An existing Nuki Hub pairing can be [taken over](docs/migrating_from_nuki_hub.md), and given back
 
+## Supported Nuki devices
+
+| Device | `type` | Status |
+| --- | --- | --- |
+| Opener | `opener` | Tested on hardware (firmware 1.12.4) |
+| Smart Lock 1st to 4th Gen, including Pro | `lock` | Implemented, not yet tried on a device |
+| Smart Lock Ultra, 5th Gen, Go | `lock` | Implemented, not yet tried on a device. Needs `pairing_as_app: true` and the 6-digit PIN without leading zeros |
+| Keypad and Keypad 2 (codes and fingerprints) | through its Opener or Smart Lock | Keypad 2 codes tested on an Opener, fingerprints not |
+| Door Sensor | through its Smart Lock | State and battery are published, not yet tried on a device |
+
+These are the devices Nuki Hub talks to over Bluetooth. The Smart Lock code comes from ESPHome Nuki Lock, where it is used with these locks, and shares the queue, keypad and MQTT code with the Opener here. What Nuki Hub has and this does not: hybrid mode (the official MQTT of Smart Lock 4th Gen and newer), GPIO lock control and the HTTP bridge API, see [differences](docs/nuki_hub.md#differences-from-nuki-hub).
+
 ## Requirements
 
 | | |
@@ -63,7 +75,7 @@ Flash it with `esphome run <file>.yaml`, put the Nuki device in pairing mode (ho
 
 On the test rig (ESP32-S3, Opener with a Keypad 2) a keypad command takes about 110 to 150 ms from publish to result, see the [measurements](docs/benchmarks.md). Nuki Hub on the same hardware averaged about 1 s per command in the same test run.
 
-Everything has been run on an Opener with a keypad only. The Smart Lock type is implemented but has not been tried on a device.
+Everything has been run on an Opener with a Keypad 2 only, see [supported devices](#supported-nuki-devices) and the [test status](docs/operations.md#test-status).
 
 ## What is no longer here
 
