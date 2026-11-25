@@ -148,6 +148,11 @@ CONF_PAIRING_MODE = "pairing_mode"
 CONF_ON_MESSAGE = "on_message"
 CONF_API_TRANSPORT = "api_transport"
 CONF_MQTT_QOS = "mqtt_qos"
+CONF_HYBRID_MODE = "hybrid_mode"
+CONF_SEND_ACTIONS = "send_actions"
+CONF_BLE_FALLBACK = "ble_fallback"
+CONF_FALLBACK_TIMEOUT = "fallback_timeout"
+CONF_OFFLINE_UPDATE_INTERVAL = "offline_update_interval"
 CONF_AUTHORIZATION_ADD = "authorization_add"
 
 TYPE_OPENER = "opener"
@@ -301,7 +306,22 @@ CONFIG_SCHEMA = cv.All(
     cv.typed_schema(
         {
             TYPE_OPENER: _BASE_SCHEMA.extend({cv.GenerateID(): cv.declare_id(NukiHubOpener)}),
-            TYPE_LOCK: _BASE_SCHEMA.extend({cv.GenerateID(): cv.declare_id(NukiHubLock)}),
+            TYPE_LOCK: _BASE_SCHEMA.extend(
+                {
+                    cv.GenerateID(): cv.declare_id(NukiHubLock),
+                    cv.Optional(CONF_HYBRID_MODE): cv.Schema(
+                        {
+                            cv.Optional(CONF_TOPIC_PREFIX): cv.All(cv.string_strict, cv.Length(min=1, max=48)),
+                            cv.Optional(CONF_SEND_ACTIONS, default=False): cv.boolean,
+                            cv.Optional(CONF_BLE_FALLBACK, default=True): cv.boolean,
+                            cv.Optional(CONF_FALLBACK_TIMEOUT, default="2s"): cv.positive_time_period_milliseconds,
+                            cv.Optional(
+                                CONF_OFFLINE_UPDATE_INTERVAL, default="10min"
+                            ): cv.positive_time_period_milliseconds,
+                        }
+                    ),
+                }
+            ),
         },
     ),
     esp32_ble.consume_connection_slots(1, "nuki_hub"),
@@ -319,6 +339,10 @@ def _final_validate(config):
             raise cv.Invalid(
                 "api_transport needs an api: component with 'custom_services: true' and 'homeassistant_services: true'"
             )
+    if "mqtt" not in full_config and any(
+        CONF_HYBRID_MODE in conf for conf in (config if isinstance(config, list) else [config])
+    ):
+        raise cv.Invalid("hybrid_mode needs an mqtt: component connected to the broker the lock publishes to")
     if "mqtt" not in full_config:
         # Without MQTT only the lock entity (lock: - platform: nuki_hub) and the automations remain
         LOGGER.warning("nuki_hub: no mqtt: component configured, the Nuki Hub topics are not available.")
@@ -399,6 +423,17 @@ async def to_code(config):
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
     cg.add(var.set_authorization_add(config[CONF_AUTHORIZATION_ADD]))
+    if hybrid := config.get(CONF_HYBRID_MODE):
+        cg.add(
+            var.set_hybrid(
+                hybrid[CONF_SEND_ACTIONS],
+                hybrid[CONF_BLE_FALLBACK],
+                hybrid[CONF_FALLBACK_TIMEOUT],
+                hybrid[CONF_OFFLINE_UPDATE_INTERVAL],
+            )
+        )
+        if CONF_TOPIC_PREFIX in hybrid:
+            cg.add(var.set_hybrid_topic_prefix(hybrid[CONF_TOPIC_PREFIX].rstrip("/")))
     cg.add(var.set_mqtt_qos(config[CONF_MQTT_QOS]))
     if config[CONF_API_TRANSPORT]:
         cg.add_define("USE_NUKI_HUB_API")

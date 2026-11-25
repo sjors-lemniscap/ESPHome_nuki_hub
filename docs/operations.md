@@ -78,7 +78,7 @@ Failure cases tried on the rig:
   switch withdrawn.
 - **A firmware update during a sync** is answered: `partial`, with what was done.
 
-Not run on hardware: a **Smart Lock** (its code shares the queue, keypad, authorization and
+Not run on hardware: **hybrid mode**, a **Smart Lock** (its code shares the queue, keypad, authorization and
 MQTT code with the Opener and compiles on both frameworks), pairing with the button (the
 pairing was taken over from Nuki Hub), a ring of the bell, wrong codes on the keypad, a
 and a real Nuki device losing power or range (only simulated with a device that never

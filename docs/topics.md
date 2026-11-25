@@ -13,6 +13,7 @@ All below `<prefix>/opener` or `<prefix>/lock`. Topics in the "write" rows are s
 | `json` | read | the state as one JSON object |
 | `availability` | read | `online` / `offline`: whether the Nuki device answers |
 | `rssi`, `address`, `statusUpdated`, `retry` | read | |
+| `hybridConnected` | read | Smart Lock with `hybrid_mode`: `1` while the lock is online on its own MQTT |
 | `battery/basicJson`, `battery/advancedJson` | read | JSON |
 | `info/firmwareVersion`, `info/hardwareVersion` | read | of the Nuki device |
 | `action` | write | `activateRTO`, `deactivateRTO`, `electricStrikeActuation`, `activateCM`, `deactivateCM` (Opener); `unlock`, `lock`, `unlatch`, `lockNgo`, `lockNgoUnlatch`, `fullLock` (Smart Lock); `fobAction1` to `3`. Answered on the same topic with `ack`, `unknown_action`, or `denied` while not paired |

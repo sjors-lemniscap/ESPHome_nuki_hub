@@ -11,6 +11,7 @@ An ESPHome component that puts a Nuki **Opener** or **Smart Lock** on MQTT with 
 - Lock actions, keypad codes with time limits, time control, authorizations, settings and the activity log, each command answered with a result
 - Optional Home Assistant lock entity and sensors through the ESPHome API, and MQTT discovery
 - The same topics over the ESPHome API for setups without a broker
+- Hybrid mode for Smart Locks with Wi-Fi or Thread: state changes from the lock's own MQTT, the rest over Bluetooth
 - An existing Nuki Hub pairing can be [taken over](docs/migrating_from_nuki_hub.md), and given back
 
 ## Supported Nuki devices
@@ -23,7 +24,7 @@ An ESPHome component that puts a Nuki **Opener** or **Smart Lock** on MQTT with 
 | Keypad and Keypad 2 (codes and fingerprints) | through its Opener or Smart Lock | Keypad 2 codes tested on an Opener, fingerprints not |
 | Door Sensor | through its Smart Lock | State and battery are published, not yet tried on a device |
 
-These are the devices Nuki Hub talks to over Bluetooth. The Smart Lock code comes from ESPHome Nuki Lock, where it is used with these locks, and shares the queue, keypad and MQTT code with the Opener here. What Nuki Hub has and this does not: hybrid mode (the official MQTT of Smart Lock 4th Gen and newer), GPIO lock control and the HTTP bridge API, see [differences](docs/nuki_hub.md#differences-from-nuki-hub).
+These are the devices Nuki Hub talks to over Bluetooth. The Smart Lock code comes from ESPHome Nuki Lock, where it is used with these locks, and shares the queue, keypad and MQTT code with the Opener here. [Hybrid mode](docs/nuki_hub.md#hybrid-mode) (the lock's own MQTT for instant state changes, on Smart Locks with Wi-Fi or Thread) is implemented too, also not yet tried on a device. What Nuki Hub has and this does not: GPIO lock control and the HTTP bridge API, see [differences](docs/nuki_hub.md#differences-from-nuki-hub).
 
 ## Requirements
 

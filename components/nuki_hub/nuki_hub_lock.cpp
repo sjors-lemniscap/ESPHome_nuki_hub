@@ -2,6 +2,10 @@
 #include "nuki_hub_names.h"
 
 #include "esphome/core/hal.h"
+#include "esphome/core/defines.h"
+#ifdef USE_MQTT
+#include "esphome/components/mqtt/mqtt_client.h"
+#endif
 #include "esphome/core/log.h"
 #include "nuki_lock_utils.h"
 
@@ -210,6 +214,15 @@ bool NukiHubLock::queue_action(const std::string &text, const std::string &reque
     return false;
   }
   const LockAction action = (LockAction) value;
+  if (this->hybrid_send_action_(action, text, request_id, received_at)) {
+    return true;
+  }
+  this->queue_ble_action_(action, text, request_id, received_at);
+  return true;
+}
+
+void NukiHubLock::queue_ble_action_(LockAction action, const std::string &text, const std::string &request_id,
+                                    uint32_t received_at) {
   Operation op;
   op.name = "lock action";
   auto started = std::make_shared<bool>(false);
@@ -252,10 +265,207 @@ bool NukiHubLock::queue_action(const std::string &text, const std::string &reque
   if (this->queue_.size() >= MAX_QUEUE) {
     this->publish_("/commandResult", "busy");
     this->publish_result_("/actionResult", request_id, text, "busy", false, received_at);
-    return true;
+    return;
   }
   this->queue_.insert(this->queue_.begin() + position, std::move(op));
+}
+
+// --------------------------------------------------------------------------------------------
+// Hybrid mode
+//
+// A lock with Wi-Fi or Thread can publish its state to the broker itself (Nuki's official MQTT
+// API, topics "nuki/<Nuki ID in hex>/..."). Like Nuki Hub (HYBRID.md) the component listens
+// there: a state change arrives at once and without a Bluetooth connection, also when paired
+// as app, where the advertisement does not announce changes. What those topics do not carry
+// is still read over Bluetooth once the lock has reached a final state. Lock actions can go
+// out over the same way ("lockAction", needs "Allow locking" in the Nuki app) and are sent
+// over Bluetooth if the lock does not confirm them in time.
+// --------------------------------------------------------------------------------------------
+
+void NukiHubLock::loop() {
+  NukiHubComponent::loop();
+  if (!this->hybrid_) {
+    return;
+  }
+  if (!this->hybrid_subscribed_) {
+    this->hybrid_subscribe_();
+  }
+  const uint32_t now = millis();
+  if (this->hybrid_action_pending_ && now - this->hybrid_action_sent_at_ > this->hybrid_fallback_timeout_) {
+    this->hybrid_action_failed_("not confirmed in time");
+  }
+  // Without the lock's own messages, and paired as app, nothing announces a change: look now
+  // and then
+  if (this->hybrid_subscribed_ && !this->hybrid_connected_ && this->hybrid_offline_interval_ > 0 &&
+      now - this->hybrid_last_offline_update_ > this->hybrid_offline_interval_) {
+    this->hybrid_last_offline_update_ = now;
+    ESP_LOGD(TAG, "Official MQTT offline, reading the state over Bluetooth");
+    this->want_state_ = true;
+  }
+}
+
+void NukiHubLock::hybrid_subscribe_() {
+#ifdef USE_MQTT
+  if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
+    return;
+  }
+  if (this->hybrid_prefix_.empty()) {
+    // The path the lock uses by itself: "nuki/" and its id in upper case hexadecimal, known
+    // once the configuration has been read
+    if (!this->config_valid_) {
+      return;
+    }
+    char prefix[sizeof("nuki/FFFFFFFF")];
+    snprintf(prefix, sizeof(prefix), "nuki/%" PRIX32, this->config_.nukiId);
+    this->hybrid_prefix_ = prefix;
+  }
+  ESP_LOGI(TAG, "Hybrid mode: listening on %s/...", this->hybrid_prefix_.c_str());
+  // ESPHome keeps the subscription and renews it after a reconnect. The lock publishes
+  // retained, so the current values arrive right away.
+  const size_t skip = this->hybrid_prefix_.size() + 1;
+  mqtt::global_mqtt_client->subscribe(
+      this->hybrid_prefix_ + "/+",
+      [this, skip](const std::string &topic, const std::string &payload) {
+        if (topic.size() > skip) {
+          this->hybrid_on_message_(topic.c_str() + skip, payload);
+        }
+      },
+      1);
+  this->hybrid_subscribed_ = true;
+  this->hybrid_last_offline_update_ = millis();
+#endif
+}
+
+void NukiHubLock::hybrid_set_connected_(bool connected) {
+  if (connected != this->hybrid_connected_) {
+    ESP_LOGI(TAG, "Official MQTT of the lock is %s", connected ? "online" : "offline");
+  }
+  this->hybrid_connected_ = connected;
+  this->publish_("/hybridConnected", connected ? "1" : "0");
+  if (!connected) {
+    this->hybrid_last_offline_update_ = millis();
+    if (this->hybrid_action_pending_) {
+      this->hybrid_action_failed_("lost the lock's connection");
+    }
+  }
+}
+
+void NukiHubLock::hybrid_on_message_(const char *key, const std::string &payload) {
+  const optional<int> value = parse_number<int>(payload);
+  ESP_LOGV(TAG, "Official MQTT %s: %s", key, payload.c_str());
+
+  if (strcmp(key, "connected") == 0) {
+    this->hybrid_set_connected_(payload == "true");
+  } else if (strcmp(key, "state") == 0) {
+    if (!value.has_value()) {
+      return;
+    }
+    const LockState state = (LockState) *value;
+    const bool moving = state == LockState::Locking || state == LockState::Unlocking ||
+                        state == LockState::Unlatching || state == LockState::Calibration;
+    if (!this->state_known_ || this->state_.lockState != state) {
+      if (!this->state_known_) {
+        this->state_ = KeyTurnerState{};
+        this->state_.doorSensorState = DoorSensorState::Unavailable;
+      }
+      this->state_.lockState = state;
+      this->state_known_ = true;
+      this->publish_state_();
+    }
+    if (this->hybrid_action_pending_ && moving) {
+      this->hybrid_action_confirmed_();
+    }
+    // The topic has the state alone: battery, trigger and the rest come over Bluetooth once
+    // the lock stands still
+    if (!moving) {
+      this->cancel_timeout("state_follow_up");
+      this->want_state_ = true;
+      this->log_refresh_at_ = millis() + 1500;
+    }
+  } else if (strcmp(key, "commandResponse") == 0) {
+    if (!value.has_value() || !this->hybrid_action_pending_) {
+      return;
+    }
+    if (*value == 0) {
+      this->hybrid_action_confirmed_();
+    } else {
+      ESP_LOGW(TAG, "Lock action over official MQTT refused (%d)", *value);
+      this->hybrid_action_failed_("refused");
+    }
+  } else if (strcmp(key, "lockActionEvent") == 0) {
+    // "<lock action>,<trigger>,<auth id>,<code id>,<context>"
+    unsigned int action = 0, trigger = 0;
+    if (sscanf(payload.c_str(), "%u,%u", &action, &trigger) < 2) {
+      return;
+    }
+    if (this->hybrid_action_pending_ && action == (unsigned int) this->hybrid_pending_action_) {
+      this->hybrid_action_confirmed_();
+    }
+  } else if (strcmp(key, "doorsensorState") == 0) {
+    if (!value.has_value() || !this->state_known_) {
+      return;
+    }
+    const DoorSensorState door = (DoorSensorState) *value;
+    if (this->state_.doorSensorState != door) {
+      this->state_.doorSensorState = door;
+      this->publish_state_();
+    }
+  }
+}
+
+bool NukiHubLock::hybrid_send_action_(LockAction action, const std::string &text, const std::string &request_id,
+                                      uint32_t received_at) {
+#ifdef USE_MQTT
+  if (!this->hybrid_ || !this->hybrid_send_actions_ || !this->hybrid_connected_ || this->hybrid_action_pending_ ||
+      mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
+    return false;
+  }
+  // The topic takes the plain lock actions; fob actions are Bluetooth only
+  if ((uint8_t) action < 1 || (uint8_t) action > 6) {
+    return false;
+  }
+  char payload[4];
+  const int length = snprintf(payload, sizeof(payload), "%u", (unsigned int) action);
+  const std::string topic = this->hybrid_prefix_ + "/lockAction";
+  if (!mqtt::global_mqtt_client->publish(topic.c_str(), payload, length, 1, false)) {
+    ESP_LOGW(TAG, "Publishing the lock action failed, using Bluetooth");
+    return false;
+  }
+  ESP_LOGI(TAG, "Lock action %s sent over official MQTT", text.c_str());
+  this->hybrid_action_pending_ = true;
+  this->hybrid_pending_action_ = action;
+  this->hybrid_pending_text_ = text;
+  this->hybrid_pending_request_id_ = request_id;
+  this->hybrid_action_received_at_ = received_at;
+  this->hybrid_action_sent_at_ = millis();
   return true;
+#else
+  return false;
+#endif
+}
+
+void NukiHubLock::hybrid_action_confirmed_() {
+  this->hybrid_action_pending_ = false;
+  this->publish_("/commandResult", "success");
+  this->publish_result_("/actionResult", this->hybrid_pending_request_id_, this->hybrid_pending_text_, "success",
+                        false, this->hybrid_action_received_at_);
+}
+
+void NukiHubLock::hybrid_action_failed_(const char *reason) {
+  this->hybrid_action_pending_ = false;
+  if (this->hybrid_ble_fallback_) {
+    ESP_LOGW(TAG, "Lock action %s over official MQTT %s, sending it over Bluetooth",
+             this->hybrid_pending_text_.c_str(), reason);
+    this->queue_ble_action_(this->hybrid_pending_action_, this->hybrid_pending_text_,
+                            this->hybrid_pending_request_id_, this->hybrid_action_received_at_);
+    return;
+  }
+  ESP_LOGW(TAG, "Lock action %s over official MQTT %s", this->hybrid_pending_text_.c_str(), reason);
+  const char *result = strcmp(reason, "refused") == 0 ? "failed" : "timeOut";
+  this->publish_("/commandResult", result);
+  this->publish_result_("/actionResult", this->hybrid_pending_request_id_, this->hybrid_pending_text_, result,
+                        strcmp(reason, "refused") == 0, this->hybrid_action_received_at_);
+  this->want_state_ = true;
 }
 
 // --------------------------------------------------------------------------------------------

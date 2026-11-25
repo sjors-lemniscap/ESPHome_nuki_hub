@@ -92,6 +92,7 @@ nuki_hub:
 | `keep_connected` | `false` | Never close the Bluetooth connection. Every command is then as fast as one that follows another (see [measurements](benchmarks.md#the-first-command-after-a-pause)), at the cost of the Nuki device's batteries: it answers about 65 times a second instead of sending an advertisement about twice a second. For a while only, a client writes the seconds to `connection/hold` |
 | `challenge_prefetch` | on for an Opener, off for a Smart Lock | Ask for the challenge of the next command when one is done, so the next one goes out at once. Not tried on a Smart Lock. Switches itself off until the restart when the device refuses two commands sent this way |
 | `mqtt_commands` | `true` | `false`: the broker only gets what the device publishes, nothing sent to it is taken as a command. For commands over the API only (`api_transport`), with MQTT kept for watching. The entities of Home Assistant's MQTT discovery can then not switch anything |
+| `hybrid_mode` | off | `type: lock` only: use the lock's own MQTT for state changes and, with `send_actions`, for lock actions, see [Hybrid mode](#hybrid-mode) |
 | `publish_activity_log` | `true` | Publish `log`, `shortLog`, `rollingLog` |
 | `max_keypad_entries` | `100` | Entries read from the keypad |
 | `max_authorization_entries` | `20` | Authorizations read |
@@ -151,6 +152,51 @@ The three values are stored by Nuki Hub in the ESP32's NVS under the keys `bleAd
 The pairing is taken over once, while the device has none; after that the option can be
 removed. Treat the key like a password: it opens the door.
 
+## Hybrid mode
+
+A Smart Lock with Wi-Fi or Thread can publish its state to the broker itself (Nuki's official
+MQTT API, topics `nuki/<Nuki ID>/...`). In hybrid mode the component listens there, like
+[Nuki Hub](https://github.com/technyon/nuki_hub/blob/master/HYBRID.md) does:
+
+- A state change is published on `<prefix>/lock/state` the moment the lock reports it, without
+  a Bluetooth connection.
+- What the lock's topics do not carry (battery, trigger, keypad, log, settings) is read over
+  Bluetooth once the lock stands still.
+- With `send_actions: true` a lock action goes out over MQTT as well and is answered on
+  `actionResult` when the lock confirms it. If it does not within `fallback_timeout`, the
+  action is sent over Bluetooth.
+- While the lock's own MQTT connection is offline, the state is read over Bluetooth every
+  `offline_update_interval`.
+
+This matters most when paired as app, which a Smart Lock Ultra, 5th Gen and Go always are:
+such a pairing gets no announcement of state changes over Bluetooth.
+
+```yaml
+nuki_hub:
+  - id: front_door
+    type: lock
+    topic_prefix: frontdoor
+    pairing_as_app: true
+    hybrid_mode:
+      send_actions: true
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `topic_prefix` | `nuki/<Nuki ID in hex>` | The path the lock publishes under, if it is not the usual one |
+| `send_actions` | `false` | Send lock, unlock, unlatch, lock 'n' go and full lock over MQTT. Needs "Allow locking" in the Nuki app's MQTT settings. Fob actions always use Bluetooth |
+| `ble_fallback` | `true` | Send an action over Bluetooth if the lock did not confirm it. With `false` it is answered with `timeOut` or `failed` |
+| `fallback_timeout` | `2s` | How long to wait for the confirmation |
+| `offline_update_interval` | `10min` | State reads over Bluetooth while the lock is offline on MQTT, `0s` for none |
+
+Set up MQTT in the Nuki app with the broker the ESP32 uses, without "Auto discovery". Whether
+the lock is online there is published on `<prefix>/lock/hybridConnected` (`1` or `0`), as
+Nuki Hub does. With "Allow locking" anyone who may publish to `nuki/<Nuki ID>/lockAction`
+can operate the lock: restrict that topic on the broker to the lock and the ESP32.
+
+Hybrid mode has not been run on a lock: it compiles and follows the code ESPHome Nuki Lock
+uses for it.
+
 ## Security
 
 - **Broker access.** Whoever may publish to `<prefix>/opener/action` can open the door, and
@@ -171,7 +217,7 @@ removed. Treat the key like a password: it opens the door.
   No per-entry topics for authorizations and no single value topics next to the JSON ones.
 - `authorization/action` adds an authorization only with `authorization_add: true`.
 - Messages are published with QoS 0 unless `mqtt_qos: 1` is set.
-- No hybrid mode (official MQTT of Smart Lock 4/5), GPIO lock control, HTTP bridge API.
+- No GPIO lock control and no HTTP bridge API. [Hybrid mode](#hybrid-mode) has fewer settings.
 - An accepted lock action is given 15 seconds (an Opener: strike delay plus strike duration
   plus 5 seconds, if that is more) to report its completion instead of the command timeout, so an action is not repeated
   because the strike was still held.
