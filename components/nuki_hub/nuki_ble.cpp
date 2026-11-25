@@ -28,7 +28,7 @@
 #include <cstring>
 #include <string>
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 static const char *const TAG = "NukiBle";
 
@@ -378,13 +378,13 @@ bool NukiBle::parse_device(const esphome::esp32_ble_tracker::ESPBTDevice &device
       return false;
     }
 
-    // A lock in pairing mode that another nuki_lock: block is already paired with would end
+    // A lock in pairing mode that another nuki_hub entry is already paired with would end
     // up with two authorizations for the same ESP32 - leave it alone
     if (this->is_paired_by_other_instance(device.address_uint64())) {
       if (this->last_ignored_pairing_address_ != device.address_uint64()) {
         this->last_ignored_pairing_address_ = device.address_uint64();
         char address[esphome::MAC_ADDRESS_PRETTY_BUFFER_SIZE];
-        ESP_LOGW(TAG, "[%s] Ignoring %s in pairing mode: already paired with another nuki_lock",
+        ESP_LOGW(TAG, "[%s] Ignoring %s in pairing mode: already paired with another nuki_hub entry",
           this->device_name_.c_str(), device.address_str_to(address));
       }
       return false;
@@ -1877,4 +1877,4 @@ void NukiBle::set_debug_command(bool enable) {
   this->debug_nuki_command_ = enable;
 }
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

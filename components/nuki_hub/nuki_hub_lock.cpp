@@ -3,7 +3,7 @@
 
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
-#include "esphome/components/nuki_lock/nuki_lock_utils.h"
+#include "nuki_lock_utils.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -12,7 +12,6 @@
 
 namespace esphome::nuki_hub {
 
-using namespace esphome::nuki_lock;
 
 static const char *const TAG = "nuki_hub.lock";
 

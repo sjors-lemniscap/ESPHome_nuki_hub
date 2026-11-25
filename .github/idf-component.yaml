@@ -1,6 +1,0 @@
-packages:
-  common: !include shared.yaml
-  
-esp32:
-  framework:
-    type: esp-idf

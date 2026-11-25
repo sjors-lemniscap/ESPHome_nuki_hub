@@ -1,7 +1,6 @@
 # nuki_hub: Nuki Hub's MQTT interface on ESPHome
 
-`nuki_hub` is a second component in this repository, next to the `nuki_lock` lock platform.
-It connects a **Nuki Opener** or a **Nuki Smart Lock** over Bluetooth and makes it available
+`nuki_hub` connects a **Nuki Opener** or a **Nuki Smart Lock** over Bluetooth and makes it available
 over MQTT with the topics and payloads of [Nuki Hub](https://github.com/technyon/nuki_hub).
 Software written against Nuki Hub (a booking system that manages keypad codes, for example)
 keeps working, while the ESP32 itself is configured, built and updated like any other
@@ -48,7 +47,7 @@ A complete example is in [`examples/nuki_hub_opener.yaml`](../examples/nuki_hub_
 ```yaml
 external_components:
   - source: github://sjors-lemniscap/ESPHome_nuki_hub
-    components: [nuki_lock, nuki_hub]
+    components: [nuki_hub]
 
 esp32_ble_tracker:
 

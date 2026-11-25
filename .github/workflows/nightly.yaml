@@ -13,11 +13,6 @@ jobs:
     strategy:
       matrix:
         config:
-          - file: .github/arduino-component.yaml
-          - file: .github/idf-component.yaml
-          - file: .github/arduino-component-encryption.yaml
-          - file: .github/idf-component-encryption.yaml
-          - file: .github/idf-component-hybrid.yaml
           - file: .github/idf-nuki-hub.yaml
           - file: .github/arduino-nuki-hub.yaml
           - file: .github/idf-nuki-hub-api.yaml

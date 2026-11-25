@@ -20,7 +20,7 @@
 #include <cstring>
 #include <string>
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 //Keyturner Pairing Service
 const esphome::esp32_ble_tracker::ESPBTUUID keyturnerPairingServiceUUID  = esphome::esp32_ble_tracker::ESPBTUUID::from_raw("a92ee100-5501-11e4-916c-0800200c9a66");
@@ -36,7 +36,7 @@ const esphome::esp32_ble_tracker::ESPBTUUID keyturnerGdioUltraUUID  = esphome::e
 const esphome::esp32_ble_tracker::ESPBTUUID keyturnerUserDataUUID  = esphome::esp32_ble_tracker::ESPBTUUID::from_raw("a92ee202-5501-11e4-916c-0800200c9a66");
 
 // Named NukiAction (not just Action) to avoid shadowing esphome::Action<Ts...>, the automation
-// framework's action base class, once this namespace is flattened directly into esphome::nuki_lock
+// framework's action base class, once this namespace is flattened directly into esphome::nuki_hub
 // (automation.h's NukiLockUnpairAction etc. extend the latter via plain `Action<Ts...>`).
 struct NukiAction {
   CommandType cmdType;
@@ -616,4 +616,4 @@ inline void logging_type_to_string(const LoggingType state, char* str) {
   }
 }
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

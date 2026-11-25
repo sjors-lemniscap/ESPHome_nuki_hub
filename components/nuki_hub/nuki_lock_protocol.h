@@ -12,7 +12,7 @@
 #include "esphome/core/log.h"
 
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 class NukiLock : public NukiBle {
   public:
     NukiLock(const std::string& device_name, const uint32_t device_id);
@@ -632,4 +632,4 @@ class NukiLock : public NukiBle {
     DoorSensorConfig door_sensor_config_;
 };
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

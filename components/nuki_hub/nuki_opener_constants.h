@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-namespace esphome::nuki_lock::opener {
+namespace esphome::nuki_hub::opener {
 
 const esphome::esp32_ble_tracker::ESPBTUUID openerPairingServiceUUID =
     esphome::esp32_ble_tracker::ESPBTUUID::from_raw("a92ae100-5501-11e4-916c-0800200c9a66");
@@ -270,4 +270,4 @@ enum class LogEntryCompletionStatus : uint8_t {
   NotAuthorized      = 0x09,
 };
 
-}  // namespace esphome::nuki_lock::opener
+}  // namespace esphome::nuki_hub::opener

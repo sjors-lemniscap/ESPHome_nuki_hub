@@ -21,7 +21,7 @@
 
 #include "esphome/core/log.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 void print_buffer(const uint8_t* buff, const uint8_t size, const bool asChars, const char* header, bool debug = false);
 bool is_char_array_not_empty(unsigned char* array, uint16_t len);
@@ -47,4 +47,4 @@ void log_updated_authorization_entry(UpdatedAuthorizationEntry updatedAuthorizat
  */
 template<std::size_t N>
 uint8_t get_weekdays_int_from_bitset(const std::bitset<N> bits);
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

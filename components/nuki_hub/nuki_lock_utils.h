@@ -3,7 +3,7 @@
 #include "esphome/components/lock/lock.h"
 #include "nuki_lock_protocol.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
     enum PinState
     {
         NotSet = 0,
@@ -42,4 +42,4 @@ namespace esphome::nuki_lock {
     void wifi_connection_status_to_string(const uint8_t status, char* str);
     void mqtt_connection_status_to_string(const uint8_t status, char* str);
     void thread_connection_status_to_string(const uint8_t status, char* str);
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

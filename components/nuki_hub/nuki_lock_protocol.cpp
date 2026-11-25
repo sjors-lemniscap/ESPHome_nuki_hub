@@ -10,7 +10,7 @@
 
 #include "esphome/core/log.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 static const char *const TAG = "NukiBle.NukiLock";
 
@@ -1091,4 +1091,4 @@ void NukiLock::log_error_code(uint8_t error_code) {
   log_lock_error_code(error_code, true);
 }
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

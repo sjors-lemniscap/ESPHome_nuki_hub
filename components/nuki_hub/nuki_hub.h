@@ -6,7 +6,7 @@
 #include "esphome/core/preferences.h"
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/lock/lock.h"
-#include "esphome/components/nuki_lock/nuki_ble.h"
+#include "nuki_ble.h"
 
 #ifdef USE_TIME
 #include "esphome/components/time/real_time_clock.h"
@@ -34,7 +34,6 @@ namespace esphome::nuki_hub {
 /// Where JSON documents live: PSRAM where the board has it, their size is not known beforehand
 inline ArduinoJson::Allocator *json_memory() { return json::heap_json_allocator(); }
 
-using nuki_lock::CmdResult;
 
 static const char *const NUKI_HUB_VERSION = "0.1.0";
 
@@ -76,8 +75,8 @@ struct KeypadCommand {
   bool only_if_expired{false};
   std::string action;
   uint16_t code_id{0};
-  nuki_lock::NewKeypadEntry add{};
-  nuki_lock::UpdatedKeypadEntry update{};
+  NewKeypadEntry add{};
+  UpdatedKeypadEntry update{};
   bool has_name{false}, has_code{false}, has_enabled{false}, has_time_limited{false};
   bool has_from{false}, has_until{false}, has_weekdays{false}, has_from_time{false}, has_until_time{false};
   bool fetched{false};
@@ -96,7 +95,7 @@ struct KeypadCommand {
  * authorizations, the hub's own maintenance topics. NukiHubOpener and NukiHubLock add the
  * device specific state, actions, configuration, time control and activity log.
  */
-class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandler {
+class NukiHubComponent : public Component, public SmartlockEventHandler {
  public:
   void setup() override;
   void loop() override;
@@ -104,7 +103,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void on_shutdown() override;
   float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
 
-  void notify(nuki_lock::EventType event_type) override;
+  void notify(EventType event_type) override;
 
   // Configuration
   void set_topic_prefix(const std::string &prefix) { this->topic_prefix_ = prefix; }
@@ -195,7 +194,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void set_time(time::RealTimeClock *clock) { this->clock_ = clock; }
 #endif
 
-  virtual nuki_lock::NukiBle *ble() = 0;
+  virtual NukiBle *ble() = 0;
   /// "opener" or "lock", the topic level below the prefix
   virtual const char *kind() const = 0;
 
@@ -317,7 +316,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
                                                    const std::vector<std::string> &commands, uint32_t received_at);
   void finish_keypad_batch_(KeypadBatch &batch);
   void delete_expired_keypad_entries_();
-  bool keypad_entry_expired_(const nuki_lock::KeypadEntry &entry);
+  bool keypad_entry_expired_(const KeypadEntry &entry);
   CmdResult keypad_command_step_(KeypadCommand &cmd);
   void keypad_command_done_(KeypadCommand &cmd, CmdResult result);
   Operation make_keypad_operation_();
@@ -326,7 +325,7 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   void describe_availability_(JsonObject json);
   void update_topic_entities_(const char *suffix, const char *payload);
   void publish_keypad_entry_discovery_(uint16_t code_id, const std::string &name, bool remove);
-  const nuki_lock::KeypadEntry *find_keypad_entry_(uint16_t code_id) const;
+  const KeypadEntry *find_keypad_entry_(uint16_t code_id) const;
 
   // Authorizations
   void handle_auth_action_(const std::string &payload);
@@ -557,12 +556,12 @@ class NukiHubComponent : public Component, public nuki_lock::SmartlockEventHandl
   uint8_t restart_reason_{0};
 
   // Keypad
-  std::vector<nuki_lock::KeypadEntry> keypad_entries_;
+  std::vector<KeypadEntry> keypad_entries_;
   bool keypad_cache_valid_{false};
   uint16_t keypad_commands_pending_{0};
 
   // Authorizations
-  std::vector<nuki_lock::AuthorizationEntry> auth_entries_;
+  std::vector<AuthorizationEntry> auth_entries_;
 
   // Activity log
   uint32_t log_marker_{0};
@@ -613,7 +612,7 @@ std::string request_id(const std::string &payload);
 }  // namespace util
 
 /// A keypad entry in the JSON form of Nuki Hub
-void keypad_entry_to_json(const nuki_lock::KeypadEntry &entry, JsonObject json, bool include_code);
+void keypad_entry_to_json(const KeypadEntry &entry, JsonObject json, bool include_code);
 
 namespace util {
 }  // namespace util

@@ -17,7 +17,7 @@
 
 #include <cstdint>
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 struct __attribute__((packed)) NewKeypadEntry {
   uint32_t code;  //needs to be 6 digits
@@ -150,4 +150,4 @@ void log_fingerprint_entry(FingerprintEntry fingerprintEntry, bool debug = false
 void log_keypad2_config(Keypad2Config keypad2Config, bool debug = false);
 void log_accessory_info(AccessoryInfo accessoryInfo, bool debug = false);
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

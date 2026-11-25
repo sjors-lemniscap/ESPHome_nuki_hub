@@ -1,7 +1,6 @@
 #include "nuki_accessories.h"
 #include "nuki_ble.h"
 #include "nuki_lock_protocol.h"
-#include "nuki_lock.h"
 #include "nuki_ble_utils.h"
 
 #include <algorithm>
@@ -13,7 +12,7 @@
 #include "esphome/core/log.h"
 #include "esp_timer.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 static const char *const TAG = "nuki_accessories";
 
@@ -350,168 +349,4 @@ bool NukiLock::is_keypad_battery_critical() {
   return false;
 }
 
-bool NukiLockComponent::valid_keypad_id(int32_t id) {
-    bool is_valid = std::find(keypad_code_ids_.begin(), keypad_code_ids_.end(), id) != keypad_code_ids_.end();
-    if (!is_valid) {
-        ESP_LOGE(TAG, "Keypad id %" PRId32 " unknown.", id);
-    }
-    return is_valid;
-}
-
-bool NukiLockComponent::valid_keypad_name(std::string name) {
-    bool name_valid = !(name == "" || name == "--");
-    if (!name_valid) {
-        ESP_LOGE(TAG, "Keypad name '%s' is invalid.", name.c_str());
-    }
-    return name_valid;
-}
-
-bool NukiLockComponent::valid_keypad_code(int32_t code) {
-    bool code_valid = (code > 100000 && code < 1000000 && (std::to_string(code).find('0') == std::string::npos));
-    if (!code_valid) {
-        ESP_LOGE(TAG, "Keypad code %" PRId32 " is invalid. Code must be 6 digits, without 0.", code);
-    }
-    return code_valid;
-}
-
-void NukiLockComponent::add_keypad_entry(std::string name, int32_t code) {
-    if (!this->nuki_lock_.is_paired_with_lock()) {
-        ESP_LOGE(TAG, "Lock is not paired, cannot add keypad entry");
-        return;
-    }
-
-    if (!keypad_paired_) {
-        ESP_LOGE(TAG, "Keypad is not paired to Nuki");
-        return;
-    }
-
-    if(this->pin_state_ != PinState::Valid) {
-        ESP_LOGW(TAG, "It seems like you did not set a valid pin!");
-        return;
-    }
-
-    if (!(valid_keypad_name(name) && valid_keypad_code(code))) {
-        ESP_LOGE(TAG, "add_keypad_entry invalid parameters");
-        return;
-    }
-
-    NewKeypadEntry entry;
-    memset(&entry, 0, sizeof(entry));
-    size_t name_len = name.length();
-    memcpy(&entry.name, name.c_str(), name_len > 20 ? 20 : name_len);
-    entry.code = code;
-
-    this->queue_nuki_command([this, entry] { return this->nuki_lock_.add_keypad_entry(entry); }, [](CmdResult result) {
-        if (result == CmdResult::Success) {
-            ESP_LOGI(TAG, "add_keypad_entry is sucessful");
-        } else {
-            ESP_LOGE(TAG, "add_keypad_entry: add_keypad_entry failed (result %d)", result);
-        }
-    });
-}
-
-void NukiLockComponent::update_keypad_entry(int32_t id, std::string name, int32_t code, bool enabled) {
-    if (!this->nuki_lock_.is_paired_with_lock()) {
-        ESP_LOGE(TAG, "Lock is not paired, cannot update keypad entry");
-        return;
-    }
-
-    if (!keypad_paired_) {
-        ESP_LOGE(TAG, "keypad is not paired to Nuki");
-        return;
-    }
-
-    if(this->pin_state_ != PinState::Valid) {
-        ESP_LOGW(TAG, "It seems like you did not set a valid pin!");
-        return;
-    }
-
-    if (!(valid_keypad_id(id) && valid_keypad_name(name) && valid_keypad_code(code))) {
-        ESP_LOGE(TAG, "update_keypad_entry invalid parameters");
-        return;
-    }
-
-    UpdatedKeypadEntry entry;
-    memset(&entry, 0, sizeof(entry));
-    entry.codeId = id;
-    size_t name_len = name.length();
-    memcpy(&entry.name, name.c_str(), name_len > 20 ? 20 : name_len);
-    entry.code = code;
-    entry.enabled = enabled ? 1 : 0;
-
-    this->queue_nuki_command([this, entry] { return this->nuki_lock_.update_keypad_entry(entry); }, [](CmdResult result) {
-        if (result == CmdResult::Success) {
-            ESP_LOGI(TAG, "update_keypad_entry is sucessful");
-        } else {
-            ESP_LOGE(TAG, "update_keypad_entry: update_keypad_entry failed (result %d)", result);
-        }
-    });
-}
-
-void NukiLockComponent::delete_keypad_entry(int32_t id) {
-    if (!this->nuki_lock_.is_paired_with_lock()) {
-        ESP_LOGE(TAG, "Lock is not paired, cannot retrieve delete entry");
-        return;
-    }
-
-    if (!keypad_paired_) {
-        ESP_LOGE(TAG, "keypad is not paired to Nuki");
-        return;
-    }
-
-    if(this->pin_state_ != PinState::Valid) {
-        ESP_LOGW(TAG, "It seems like you did not set a valid pin!");
-        return;
-    }
-
-    if (!valid_keypad_id(id)) {
-        ESP_LOGE(TAG, "delete_keypad_entry invalid parameters");
-        return;
-    }
-
-    this->queue_nuki_command([this, id] { return this->nuki_lock_.delete_keypad_entry(id); }, [](CmdResult result) {
-        if (result == CmdResult::Success) {
-            ESP_LOGI(TAG, "delete_keypad_entry is sucessful");
-        } else {
-            ESP_LOGE(TAG, "delete_keypad_entry: delete_keypad_entry failed (result %d)", result);
-        }
-    });
-}
-
-void NukiLockComponent::print_keypad_entries() {
-    if (!this->nuki_lock_.is_paired_with_lock()) {
-        ESP_LOGE(TAG, "Lock is not paired, cannot retrieve keypad entries");
-        return;
-    }
-
-    if (!keypad_paired_) {
-        ESP_LOGE(TAG, "Keypad is not paired to Nuki");
-        return;
-    }
-
-    if(this->pin_state_ != PinState::Valid) {
-        ESP_LOGW(TAG, "It seems like you did not set a valid pin!");
-        return;
-    }
-
-    this->queue_nuki_command([this] { return this->nuki_lock_.retrieve_keypad_entries(0, 0xffff); }, [this](CmdResult result) {
-        if (result == CmdResult::Success) {
-            ESP_LOGI(TAG, "retrieve_keypad_entries sucess");
-            std::vector<KeypadEntry> entries;
-            this->nuki_lock_.get_keypad_entries(&entries);
-
-            std::sort(entries.begin(), entries.end(), [](const KeypadEntry& a, const KeypadEntry& b) { return a.codeId < b.codeId; });
-
-            keypad_code_ids_.clear();
-            keypad_code_ids_.reserve(entries.size());
-            for (const auto& entry : entries) {
-                keypad_code_ids_.push_back(entry.codeId);
-                ESP_LOGI(TAG, "keypad #%d %s is %s", entry.codeId, entry.name, entry.enabled ? "enabled" : "disabled");
-            }
-        } else {
-            ESP_LOGE(TAG, "print_keypad_entries: retrieve_keypad_entries failed (result %d)", result);
-        }
-    });
-}
-
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

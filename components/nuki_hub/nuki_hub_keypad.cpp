@@ -12,7 +12,6 @@
 
 namespace esphome::nuki_hub {
 
-using namespace esphome::nuki_lock;
 
 static const char *const TAG = "nuki_hub.keypad";
 

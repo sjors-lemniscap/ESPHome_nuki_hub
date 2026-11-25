@@ -5,7 +5,7 @@
 #include "esphome/components/lock/lock.h"
 #include "nuki_lock_protocol.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
     lock::LockState nuki_to_lock_state(LockState nukiLockState) {
         switch(nukiLockState) {
             case LockState::Locked:
@@ -535,4 +535,4 @@ namespace esphome::nuki_lock {
         sprintf(str, "Thread %s, SSE %s%s%s", connection_status_to_string(status), sse_status,
                 (status & 16) ? ", commissioning active" : "", (status & 32) ? ", WiFi suspended" : "");
     }
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

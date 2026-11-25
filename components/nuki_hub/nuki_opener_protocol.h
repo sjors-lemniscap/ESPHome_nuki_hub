@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace esphome::nuki_lock::opener {
+namespace esphome::nuki_hub::opener {
 
 class NukiOpener : public NukiBle {
   public:
@@ -106,4 +106,4 @@ class NukiOpener : public NukiBle {
     uint32_t list_timeout_ms_{5000};
 };
 
-}  // namespace esphome::nuki_lock::opener
+}  // namespace esphome::nuki_hub::opener

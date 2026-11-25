@@ -23,7 +23,7 @@ HARNESS = r'''
 #define ESP_LOGD(...) ((void) 0)
 #define ESP_LOGW(...) ((void) 0)
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 static int64_t now_ms = 100;
 int64_t esp_timer_get_time() { return now_ms * 1000; }
 struct Action {
@@ -90,7 +90,7 @@ class NukiBle {
 
 SCENARIOS = r'''
 }
-using namespace esphome::nuki_lock;
+using namespace esphome::nuki_hub;
 int main(int argc, char **argv) {
   assert(argc == 2);
   const std::string scenario = argv[1];
@@ -201,7 +201,7 @@ class CommandCompletionTests(unittest.TestCase):
         cls.addClassCleanup(cls.workspace.cleanup)
         directory = Path(cls.workspace.name)
         header = Path(os.environ.get(
-            "NUKI_BLE_HEADER", ROOT / "components/nuki_lock/nuki_ble.h"
+            "NUKI_BLE_HEADER", ROOT / "components/nuki_hub/nuki_ble.h"
         )).read_text()
         start = header.index(
             "template <typename TDeviceAction>\n"
@@ -213,7 +213,7 @@ class CommandCompletionTests(unittest.TestCase):
         cls.binary = directory / "command_completion"
         result = subprocess.run([
             compiler, "-std=gnu++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
-            "-I", str(ROOT / "components/nuki_lock"), str(source),
+            "-I", str(ROOT / "components/nuki_hub"), str(source),
             "-o", str(cls.binary),
         ], capture_output=True, text=True)
         if result.returncode != 0:

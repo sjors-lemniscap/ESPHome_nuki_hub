@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 const char BLE_ADDRESS_STORE_NAME[]      = "bleAddress";
 const char SECURITY_PINCODE_STORE_NAME[] = "securityPinCode";
@@ -473,4 +473,4 @@ enum class CommandState {
   TimeOut               = 6
 };
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

@@ -30,7 +30,7 @@
 #include <cstring>
 #include <string>
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 // BLEClientBase (esp32_ble_client) extends esphome::esp32_ble_tracker::ESPBTClient, which itself extends
 // esphome::esp32_ble_tracker::ESPBTDeviceListener - so parse_device() below already overrides the listener
@@ -590,7 +590,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     // The address of the paired device, to restore it if the client base drops it
     uint64_t paired_address_ = 0;
     void save_paired_address_();
-    // Kept (and still settable) for API compatibility with nuki_lock.cpp's setup(); no
+    // Kept (and still settable) for API compatibility; no
     // longer consumed internally - BLEClientBase::connect() is a single non-blocking
     // attempt per call, and the existing execute_action()-driven retry-via-repeated-calls
     // (see the template methods below) already retries connect_ble() every tick for free, bounded by
@@ -720,7 +720,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     // "Waiting for a lock in pairing mode" was logged for the current wait
     bool pairing_wait_logged_ = false;
 
-    // All NukiBle instances (one per nuki_lock: block), so pairing can skip locks another
+    // All NukiBle instances (one per nuki_hub entry), so pairing can skip locks another
     // instance is already paired with - see is_paired_by_other_instance()
     static NukiBle *first_instance_;
     NukiBle *next_instance_{nullptr};
@@ -1294,4 +1294,4 @@ CmdResult NukiBle::cmd_chall_acc_state_machine(const TDeviceAction action) {
   return CmdResult::Working;
 }
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

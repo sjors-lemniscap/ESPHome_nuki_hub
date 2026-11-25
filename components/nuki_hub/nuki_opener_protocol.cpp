@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cstring>
 
-namespace esphome::nuki_lock::opener {
+namespace esphome::nuki_hub::opener {
 
 static const char *const TAG = "NukiOpener";
 
@@ -484,4 +484,4 @@ void NukiOpener::log_error_code(uint8_t error_code) {
   ESP_LOGE(TAG, "%s", name);
 }
 
-}  // namespace esphome::nuki_lock::opener
+}  // namespace esphome::nuki_hub::opener

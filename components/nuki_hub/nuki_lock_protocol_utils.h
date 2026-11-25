@@ -18,7 +18,7 @@
 #include <bitset>
 #include "esphome/core/log.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 void cmd_result_to_string(const CmdResult state, char* str);
 
@@ -46,4 +46,4 @@ void log_general_statistics(GeneralStatistics generalStatistics, bool debug = fa
 void log_daily_statistics(DailyStatistics dailyStatistics, bool debug = false);
 void log_internal_log_entry(InternalLogEntry internalLogEntry, bool debug = false);
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

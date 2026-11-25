@@ -1,11 +1,10 @@
 #pragma once
 
 #include "nuki_hub.h"
-#include "esphome/components/nuki_lock/nuki_opener_protocol.h"
+#include "nuki_opener_protocol.h"
 
 namespace esphome::nuki_hub {
 
-namespace opener = nuki_lock::opener;
 
 /// A Nuki Opener, published below `<prefix>/opener`
 class NukiHubOpener : public NukiHubComponent {
@@ -13,7 +12,7 @@ class NukiHubOpener : public NukiHubComponent {
   explicit NukiHubOpener(const std::string &device_name)
       : nuki_opener_(device_name, fnv1_hash(device_name)) {}
 
-  nuki_lock::NukiBle *ble() override { return &this->nuki_opener_; }
+  NukiBle *ble() override { return &this->nuki_opener_; }
   opener::NukiOpener *get_nuki_opener() { return &this->nuki_opener_; }
   const char *kind() const override { return "opener"; }
 

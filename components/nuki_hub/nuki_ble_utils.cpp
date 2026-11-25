@@ -12,7 +12,7 @@
 #include "esp_system.h"
 #include "esp_random.h"
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 static const char *const TAG = "NukiBle";
 
@@ -215,4 +215,4 @@ uint8_t get_weekdays_int_from_bitset(const std::bitset<N> bits) {
   }
   return result;
 }
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub

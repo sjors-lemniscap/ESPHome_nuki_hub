@@ -18,7 +18,7 @@
 #include <cstdint>
 
 
-namespace esphome::nuki_lock {
+namespace esphome::nuki_hub {
 
 static const char *const TAG = "NukiBle.NukiLock";
 
@@ -666,4 +666,4 @@ void log_internal_log_entry(InternalLogEntry internalLogEntry, bool debug) {
   }
 }
 
-}  // namespace esphome::nuki_lock
+}  // namespace esphome::nuki_hub
