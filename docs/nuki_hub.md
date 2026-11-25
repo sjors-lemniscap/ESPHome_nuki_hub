@@ -47,7 +47,7 @@ A complete example is in [`examples/nuki_hub_opener.yaml`](../examples/nuki_hub_
 
 ```yaml
 external_components:
-  - source: github://sjors-lemniscap/ESPHome_nuki_hub
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub@nuki-hub
     components: [nuki_lock, nuki_hub]
 
 esp32_ble_tracker:
