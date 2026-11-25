@@ -621,7 +621,12 @@ CmdResult NukiBle::enable_logging(const bool enable) {
   memcpy(action.payload, &payload, sizeof(payload));
   action.payloadLen = sizeof(payload);
 
-  return this->execute_action(action);
+  const CmdResult result = this->execute_action(action);
+  if (result == CmdResult::Success) {
+    this->logging_enabled_ = enable;
+    this->logging_known_ = true;
+  }
+  return result;
 }
 
 CmdResult NukiBle::request_most_recent_command(uint16_t* retrievedCommand) {
@@ -1657,6 +1662,7 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     }
     case Command::LogEntryCount : {
       this->logging_enabled_ = data[0] != 0;
+      this->logging_known_ = true;
       memcpy(&this->log_entry_count_, &data[1], sizeof(this->log_entry_count_));
       if (this->debug_nuki_readable_data_) {
         ESP_LOGD(TAG, "Logging enabled: %d, total nr of log entries: %d", this->logging_enabled_, this->log_entry_count_);

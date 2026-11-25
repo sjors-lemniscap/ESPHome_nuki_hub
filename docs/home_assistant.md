@@ -191,7 +191,7 @@ button:
 
 | Platform | Smart Lock | Opener | Both |
 | --- | --- | --- | --- |
-| `switch` | `bluetooth_pairing_enabled`, `auto_unlatch`, `led_enabled`, `night_mode_enabled`, `night_mode_auto_lock_enabled`, `night_mode_auto_unlock_disabled`, `night_mode_immediate_lock_on_start_enabled`, `auto_lock_enabled`, `auto_unlock_disabled`, `immediate_auto_lock_enabled`, `auto_update_enabled`, `single_lock_enabled`, `dst_mode_enabled`, `auto_battery_type_detection_enabled`, `slow_speed_during_night_mode_enabled`, `detached_cylinder_enabled` | `led_flash_enabled`, `sound_confirmation`, `disable_rto_after_ring`, `random_electric_strike_delay` | `pairing_mode`, `button_enabled` |
+| `switch` | `bluetooth_pairing_enabled`, `auto_unlatch`, `led_enabled`, `night_mode_enabled`, `night_mode_auto_lock_enabled`, `night_mode_auto_unlock_disabled`, `night_mode_immediate_lock_on_start_enabled`, `auto_lock_enabled`, `auto_unlock_disabled`, `immediate_auto_lock_enabled`, `auto_update_enabled`, `logging_enabled`, `single_lock_enabled`, `dst_mode_enabled`, `auto_battery_type_detection_enabled`, `slow_speed_during_night_mode_enabled`, `detached_cylinder_enabled` | `led_flash_enabled`, `sound_confirmation`, `disable_rto_after_ring`, `random_electric_strike_delay` | `pairing_mode`, `button_enabled` |
 | `number` | `led_brightness`, `timezone_offset`, `lock_n_go_timeout`, `auto_lock_timeout`, `unlatch_duration`, `unlocked_position_offset`, `locked_position_offset`, `single_locked_position_offset`, `unlocked_to_locked_transition_offset` | `sound_level`, `rto_timeout`, `electric_strike_delay`, `electric_strike_duration`, `doorbell_suppression_duration` | |
 | `select` | `timezone`, `advertising_mode`, `battery_type`, `motor_speed` | `sound_ring`, `sound_open`, `sound_rto`, `sound_cm`, `doorbell_suppression` | `single_button_press_action`, `double_button_press_action`, `fob_action_1` to `3` |
 | `button` | `request_calibration` | | `unpair`, `reboot` (the Nuki device), `query_state`, `query_config`, `query_battery`, `query_keypad` |
@@ -248,5 +248,9 @@ button:
 | `on_message` (trigger, in the `nuki_hub:` entry) | Fires for everything published below `<prefix>/<kind>` (not the `maintenance` and `info` topics of the ESP32), with `topic` (same form) and `payload`. Works without MQTT |
 | `nuki_hub.set_pairing_mode` | `pairing_mode: true` looks for a Nuki device in pairing mode until one is paired |
 | `nuki_hub.unpair` | Forgets the pairing |
+| `nuki_hub.set_action_options` | `force`, `auto_unlock` and `name_suffix` for the next lock action only, also one from the lock entity. See [topics](topics.md) |
+| `nuki_hub.set_security_pin` | Replaces the `security_pin` of the configuration (templatable). Kept in flash and stronger than the YAML, also after a new firmware; `0` goes back to the YAML |
+| `on_paired` (trigger, in the `nuki_hub:` entry) | A pairing was made |
+| `on_pairing_mode_on`, `on_pairing_mode_off` (triggers) | Pairing mode was switched |
 | `nuki_hub.paired` | Condition: a pairing is stored |
 | `nuki_hub.available` | Condition: the Nuki device answered the last commands and is advertising |

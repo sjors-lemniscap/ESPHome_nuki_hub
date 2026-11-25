@@ -193,6 +193,7 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
      * @param enable true to enable logging, false to disable
      */
     CmdResult enable_logging(const bool enable);
+    bool is_logging_known() const { return this->logging_known_; }
 
     /**
      * @brief Requests the identifier of the most recently executed command from the lock via BLE
@@ -780,6 +781,8 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     bool keypad_code_count_received_ = false;
     uint16_t log_entry_count_ = 0;
     bool logging_enabled_ = false;
+    // Whether the device has told it yet: it comes with the count of log entries
+    bool logging_known_ = false;
     uint16_t most_recent_command_ = 0;
     std::atomic_int rssi_;
     int64_t time_now_ = 0;

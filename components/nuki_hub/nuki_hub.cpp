@@ -144,13 +144,16 @@ void NukiHubComponent::setup() {
     }
   }
 
-  if (this->security_pin_ != 0) {
-    if (ble->is_lock_ultra()) {
-      ble->save_ultra_pincode(this->security_pin_, false);
-    } else if (ble->get_security_pincode() != (uint16_t) this->security_pin_) {
-      ble->save_security_pincode((uint16_t) this->security_pin_);
-    }
+  // A PIN set while running (nuki_hub.set_security_pin) goes before the one of the configuration
+  this->configured_pin_ = this->security_pin_;
+  this->pin_override_pref_ =
+      global_preferences->make_preference<uint32_t>(fnv1_hash(this->topic_prefix_ + "_nuki_hub_pin"));
+  uint32_t override_pin = 0;
+  if (this->pin_override_pref_.load(&override_pin) && override_pin != 0 && override_pin <= 999999) {
+    ESP_LOGI(TAG, "Using the security PIN set while running, not the one of the configuration");
+    this->security_pin_ = override_pin;
   }
+  this->apply_security_pin_();
 
   this->register_handlers_();
   this->need_beacon_ = true;
@@ -554,6 +557,11 @@ void NukiHubComponent::register_handlers_() {
       action = json["action"].as<const char *>();
       request_id = util::as_text(json["requestId"]);
       timeout = json["timeout"].as<unsigned int>();
+      if (json["force"].is<JsonVariantConst>() || json["autoUnlock"].is<JsonVariantConst>() ||
+          json["nameSuffix"].is<JsonVariantConst>()) {
+        this->set_action_options(json["force"].as<bool>(), json["autoUnlock"].as<bool>(),
+                                 util::as_text(json["nameSuffix"]));
+      }
     }
     if (!this->is_paired()) {
       this->publish_("/action", "denied");
@@ -1328,6 +1336,7 @@ void NukiHubComponent::loop() {
         this->want_keypad_ = this->want_auth_ = this->want_time_control_ = true;
         this->want_pin_check_ = this->security_pin_ != 0;
         this->want_log_ = this->publish_auth_log_;
+        this->paired_callback_.call();
         char address[18] = {0};
         ble->get_mac_address(address);
         this->publish_("/address", address);
@@ -1452,11 +1461,41 @@ void NukiHubComponent::notify(EventType event_type) {
   }
 }
 
+void NukiHubComponent::apply_security_pin_() {
+  NukiBle *ble = this->ble();
+  if (this->security_pin_ != 0) {
+    if (ble->is_lock_ultra()) {
+      ble->save_ultra_pincode(this->security_pin_, false);
+    } else if (ble->get_security_pincode() != (uint16_t) this->security_pin_) {
+      ble->save_security_pincode((uint16_t) this->security_pin_);
+    }
+  }
+}
+
+void NukiHubComponent::override_security_pin(uint32_t pin) {
+  if (pin > 999999) {
+    ESP_LOGW(TAG, "A security PIN has at most 6 digits");
+    return;
+  }
+  this->pin_override_pref_.save(&pin);
+  this->security_pin_ = pin != 0 ? pin : this->configured_pin_;
+  ESP_LOGI(TAG, "Security PIN %s", pin != 0 ? "replaced" : "back to the one of the configuration");
+  this->apply_security_pin_();
+  this->pin_valid_ = false;
+  this->pin_checked_ = false;
+  this->want_pin_check_ = this->security_pin_ != 0 && this->is_paired();
+  this->state_callback_.call();
+}
+
 void NukiHubComponent::set_pairing_mode(bool enabled) {
+  const bool changed = this->pairing_mode_ != enabled;
   this->pairing_mode_ = enabled;
   this->ble()->set_pairing_mode_active(enabled);
   ESP_LOGI(TAG, "Pairing mode %s", enabled ? "on" : "off");
   this->state_callback_.call();
+  if (changed) {
+    this->pairing_mode_callback_.call(enabled);
+  }
 }
 
 // Takes effect in loop(): it may be asked for from within a running command (an automation

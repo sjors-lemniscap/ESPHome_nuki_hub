@@ -160,6 +160,15 @@ result on `keypad/expiredResult`.
 **`query/authorizations`, `query/timecontrol`, `query/fingerprints`**: `1` reads the list
 again. Fingerprints (Keypad 2) are published on `fingerprint/json` on request only.
 
+**Options of a lock action**: `{"action":"unlock","force":true,"autoUnlock":true,"nameSuffix":"Doorbell"}`
+on `action`. `force` skips the device's own checks, `autoUnlock` marks the action as an
+automatic unlock in the activity log, `nameSuffix` (at most 19 characters) is added to the
+name of its log entry. With hybrid mode such an action goes over Bluetooth.
+
+**`loggingEnabled`** in `configuration/action` (Smart Lock) switches the activity log of the
+lock on and off. It is in `configuration/basicJson` once the log was read, which is where
+the lock tells it.
+
 **Continuous mode for a time** (Opener): `{"action":"activateCM","timeout":30}` on `action`
 switches it on for 30 minutes.
 

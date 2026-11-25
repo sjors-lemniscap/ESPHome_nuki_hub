@@ -156,6 +156,12 @@ CONF_FALLBACK_TIMEOUT = "fallback_timeout"
 CONF_OFFLINE_UPDATE_INTERVAL = "offline_update_interval"
 CONF_AUTHORIZATION_ADD = "authorization_add"
 CONF_DOOR_SENSOR_INPUT = "door_sensor_input"
+CONF_ON_PAIRED = "on_paired"
+CONF_ON_PAIRING_MODE_ON = "on_pairing_mode_on"
+CONF_ON_PAIRING_MODE_OFF = "on_pairing_mode_off"
+CONF_FORCE = "force"
+CONF_AUTO_UNLOCK = "auto_unlock"
+CONF_NAME_SUFFIX = "name_suffix"
 
 TYPE_OPENER = "opener"
 TYPE_LOCK = "lock"
@@ -172,6 +178,10 @@ NukiHubCommandAction = nuki_hub_ns.class_("NukiHubCommandAction", automation.Act
 NukiHubMessageTrigger = nuki_hub_ns.class_(
     "NukiHubMessageTrigger", automation.Trigger.template(cg.std_string, cg.std_string)
 )
+NukiHubActionOptionsAction = nuki_hub_ns.class_("NukiHubActionOptionsAction", automation.Action)
+NukiHubSecurityPinAction = nuki_hub_ns.class_("NukiHubSecurityPinAction", automation.Action)
+NukiHubPairedTrigger = nuki_hub_ns.class_("NukiHubPairedTrigger", automation.Trigger.template())
+NukiHubPairingModeTrigger = nuki_hub_ns.class_("NukiHubPairingModeTrigger", automation.Trigger.template())
 NukiHubPairedCondition = nuki_hub_ns.class_("NukiHubPairedCondition", automation.Condition)
 NukiHubAvailableCondition = nuki_hub_ns.class_("NukiHubAvailableCondition", automation.Condition)
 
@@ -252,6 +262,15 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_MQTT_LOG): logger.is_log_level,
             cv.Optional(CONF_ON_MESSAGE): automation.validate_automation(
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(NukiHubMessageTrigger)}
+            ),
+            cv.Optional(CONF_ON_PAIRED): automation.validate_automation(
+                {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(NukiHubPairedTrigger)}
+            ),
+            cv.Optional(CONF_ON_PAIRING_MODE_ON): automation.validate_automation(
+                {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(NukiHubPairingModeTrigger)}
+            ),
+            cv.Optional(CONF_ON_PAIRING_MODE_OFF): automation.validate_automation(
+                {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(NukiHubPairingModeTrigger)}
             ),
             cv.Optional(CONF_LOG_MARKER_IN_FLASH, default=False): cv.boolean,
             # The topics as an action and an event of the ESPHome API, see docs/nuki_hub.md
@@ -479,6 +498,14 @@ async def to_code(config):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(trigger, [(cg.std_string, "topic"), (cg.std_string, "payload")], conf)
 
+    for conf in config.get(CONF_ON_PAIRED, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [], conf)
+    for key, on in ((CONF_ON_PAIRING_MODE_ON, True), (CONF_ON_PAIRING_MODE_OFF, False)):
+        for conf in config.get(key, []):
+            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, on)
+            await automation.build_automation(trigger, [], conf)
+
     add_nuki_build_requirements()
 
 
@@ -561,4 +588,44 @@ async def nuki_hub_command_to_code(config, action_id, template_arg, args):
     await cg.register_parented(var, config[CONF_ID])
     cg.add(var.set_topic(await cg.templatable(config[CONF_TOPIC], args, cg.std_string)))
     cg.add(var.set_payload(await cg.templatable(config[CONF_PAYLOAD], args, cg.std_string)))
+    return var
+
+
+@automation.register_action(
+    "nuki_hub.set_action_options",
+    NukiHubActionOptionsAction,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(NukiHubComponent),
+            cv.Optional(CONF_FORCE, default=False): cv.templatable(cv.boolean),
+            cv.Optional(CONF_AUTO_UNLOCK, default=False): cv.templatable(cv.boolean),
+            cv.Optional(CONF_NAME_SUFFIX, default=""): cv.templatable(cv.string),
+        }
+    ),
+    synchronous=True,
+)
+async def nuki_hub_set_action_options_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    cg.add(var.set_force(await cg.templatable(config[CONF_FORCE], args, cg.bool_)))
+    cg.add(var.set_auto_unlock(await cg.templatable(config[CONF_AUTO_UNLOCK], args, cg.bool_)))
+    cg.add(var.set_name_suffix(await cg.templatable(config[CONF_NAME_SUFFIX], args, cg.std_string)))
+    return var
+
+
+@automation.register_action(
+    "nuki_hub.set_security_pin",
+    NukiHubSecurityPinAction,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(NukiHubComponent),
+            cv.Required(CONF_SECURITY_PIN): cv.templatable(cv.int_range(min=0, max=999999)),
+        }
+    ),
+    synchronous=True,
+)
+async def nuki_hub_set_security_pin_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    cg.add(var.set_security_pin(await cg.templatable(config[CONF_SECURITY_PIN], args, cg.uint32)))
     return var

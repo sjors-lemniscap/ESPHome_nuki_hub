@@ -35,7 +35,7 @@ over the ESPHome API alone.
 
 ## Entities
 
-The switches, numbers, selects and buttons keep their keys, in `switch:`, `number:`,
+The switches (`logging_enabled` included), numbers, selects and buttons keep their keys, in `switch:`, `number:`,
 `select:` and `button:` with `platform: nuki_hub`, see
 [Settings](home_assistant.md#settings). The rest:
 
@@ -74,13 +74,13 @@ How topics become entities is in [Entities from topics](home_assistant.md#entiti
 | `nuki_lock.request_calibration` | `nuki_hub.command` with topic `/configuration/action` and payload `{"recalibrateNuki":"1"}` |
 | conditions `nuki_lock.paired`, `nuki_lock.connected` | `nuki_hub.paired`, `nuki_hub.available` |
 | `on_event_log_action` | `on_message`, for the topics `/event/action` and `/event/keypad` |
+| `nuki_lock.set_security_pin` | `nuki_hub.set_security_pin` |
+| Home Assistant action `set_lock_action_options` | `nuki_hub.set_action_options`, or `force`, `autoUnlock` and `nameSuffix` in a JSON command on `/action` |
+| `on_paired_action`, `on_pairing_mode_on_action`, `on_pairing_mode_off_action` | `on_paired`, `on_pairing_mode_on`, `on_pairing_mode_off` in `nuki_hub:` |
 
 ## Not here
 
-- The `logging_enabled` switch (the lock's activity log on or off).
-- `set_lock_action_options` (force, auto unlock, name suffix for the next action).
-- `nuki_lock.set_security_pin`: the PIN is the one in the YAML.
-- `on_pairing_mode_on_action`, `on_pairing_mode_off_action` and `on_paired_action`.
+- `pairing_mode_timeout`.
 - The Home Assistant event in ESPHome Nuki Lock's format: the entries arrive with the names
   Nuki Hub uses.
 

@@ -73,7 +73,7 @@ class NukiHubLock : public NukiHubComponent {
   CmdResult settle_list_(CmdResult result, size_t size);
 
   void queue_ble_action_(LockAction action, const std::string &text, const std::string &request_id,
-                         uint32_t received_at);
+                         uint32_t received_at, uint8_t flags = 0, const std::string &suffix = "");
   void hybrid_subscribe_();
   void hybrid_on_message_(const char *key, const std::string &payload);
   void hybrid_set_connected_(bool connected);

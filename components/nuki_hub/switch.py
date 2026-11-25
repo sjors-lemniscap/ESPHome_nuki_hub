@@ -32,6 +32,8 @@ SETTINGS = {
     "auto_battery_type_detection_enabled": "automaticBatteryTypeDetection",
     "slow_speed_during_night_mode_enabled": "enableSlowSpeedDuringNightMode",
     "detached_cylinder_enabled": "detachedCylinder",
+    # Known once the activity log was read, which needs the security PIN
+    "logging_enabled": "loggingEnabled",
     # Opener
     "led_flash_enabled": "ledFlashEnabled",
     "sound_confirmation": "soundConfirmation",

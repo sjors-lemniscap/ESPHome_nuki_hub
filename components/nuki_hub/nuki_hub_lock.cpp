@@ -204,6 +204,7 @@ std::vector<NukiHubComponent::DiscoverySetting> NukiHubLock::discovery_settings(
       {"batteryType", "Battery type", true, 0, 0, names_of(BATTERY_TYPES)},
       {"motorSpeed", "Motor speed", true, 0, 0, names_of(MOTOR_SPEEDS)},
       {"pairingEnabled", "Bluetooth pairing", false, 0, 0},
+      {"loggingEnabled", "Activity log", false, 0, 0},
       {"dstMode", "Daylight saving time", false, 0, 0},
       {"timeZoneOffset", "Time zone offset", false, 0, 60},
       {"timeZone", "Time zone", false, 0, 0, timezone_names()},
@@ -261,25 +262,31 @@ bool NukiHubLock::queue_action(const std::string &text, const std::string &reque
     return false;
   }
   const LockAction action = (LockAction) value;
-  if (this->hybrid_send_action_(action, text, request_id, received_at)) {
+  // Options are for this action only, and the lock's own MQTT has no place for them
+  const uint8_t flags = this->action_flags_;
+  const std::string suffix = std::move(this->action_suffix_);
+  this->action_flags_ = 0;
+  this->action_suffix_.clear();
+  if (flags == 0 && suffix.empty() && this->hybrid_send_action_(action, text, request_id, received_at)) {
     return true;
   }
-  this->queue_ble_action_(action, text, request_id, received_at);
+  this->queue_ble_action_(action, text, request_id, received_at, flags, suffix);
   return true;
 }
 
 void NukiHubLock::queue_ble_action_(LockAction action, const std::string &text, const std::string &request_id,
-                                    uint32_t received_at) {
+                                    uint32_t received_at, uint8_t flags, const std::string &suffix) {
   Operation op;
   op.name = "lock action";
   auto started = std::make_shared<bool>(false);
-  op.step = [this, action, started] {
+  op.step = [this, action, started, flags, suffix] {
     if (!*started) {
       // Only what the lock pushes during this action counts as its outcome
       *started = true;
       this->nuki_lock_.clear_pushed_key_turner_state();
     }
-    CmdResult result = this->nuki_lock_.lock_action(action, 1, 0);
+    CmdResult result = this->nuki_lock_.lock_action(action, 1, flags, suffix.empty() ? nullptr : suffix.c_str(),
+                                                    (uint8_t) suffix.size());
     if (result != CmdResult::Working) {
       this->publish_("/commandResult", result_to_string(result));
     }
@@ -584,6 +591,10 @@ void NukiHubLock::publish_config_() {
   json["longitude"] = c.longitude;
   json["autoUnlatch"] = c.autoUnlatch;
   json["pairingEnabled"] = c.pairing_enabled;
+  if (this->nuki_lock_.is_logging_known()) {
+    // Told with the activity log, so only known once that was read (needs the PIN)
+    json["loggingEnabled"] = this->nuki_lock_.get_logging_enabled() ? 1 : 0;
+  }
   json["buttonEnabled"] = c.buttonEnabled;
   json["ledEnabled"] = c.ledEnabled;
   json["ledBrightness"] = c.ledBrightness;
@@ -773,6 +784,8 @@ void NukiHubLock::handle_config_action(const std::string &payload) {
       }
     } else if (key == "autoUnlatch") {
       number_in(c.autoUnlatch, 0, 1, [lock](long v) { return lock->enable_auto_unlatch(v); });
+    } else if (key == "loggingEnabled") {
+      number_in(lock->is_logging_known() ? lock->get_logging_enabled() : -1, 0, 1, [lock](long v) { return lock->enable_logging(v); });
     } else if (key == "pairingEnabled") {
       number_in(c.pairing_enabled, 0, 1, [lock](long v) { return lock->enable_pairing(v); });
     } else if (key == "buttonEnabled") {

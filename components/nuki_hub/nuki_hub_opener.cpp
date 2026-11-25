@@ -238,10 +238,14 @@ bool NukiHubOpener::queue_action(const std::string &text, const std::string &req
   if (!parse_lock_action(text, &action)) {
     return false;
   }
+  const uint8_t flags = this->action_flags_;
+  const std::string suffix = std::move(this->action_suffix_);
+  this->action_flags_ = 0;
+  this->action_suffix_.clear();
   Operation op;
   op.name = "opener action";
   auto started = std::make_shared<bool>(false);
-  op.step = [this, action, started, timeout] {
+  op.step = [this, action, started, timeout, flags, suffix] {
     if (!*started) {
       // Only what the Opener pushes during this action counts as its outcome
       *started = true;
@@ -250,7 +254,8 @@ bool NukiHubOpener::queue_action(const std::string &text, const std::string &req
     // Continuous mode can end by itself after a number of minutes
     CmdResult result = action == opener::LockAction::ActivateCM && timeout > 0
                            ? this->nuki_opener_.continuous_mode(true, timeout)
-                           : this->nuki_opener_.lock_action(action, 0, 0);
+                           : this->nuki_opener_.lock_action(action, 0, flags, suffix.empty() ? nullptr : suffix.c_str(),
+                                                            (uint8_t) suffix.size());
     if (result != CmdResult::Working) {
       this->publish_("/commandResult", result_to_string(result));
     }

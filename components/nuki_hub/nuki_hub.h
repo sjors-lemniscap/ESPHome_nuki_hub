@@ -243,6 +243,19 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
     this->json_listeners_.push_back({suffix, std::move(callback)});
   }
   bool pairing_mode() const { return this->pairing_mode_; }
+  /// For the next lock action only: `force` skips the device's own checks, `auto_unlock` marks
+  /// it as an automatic unlock in the activity log, `name_suffix` (19 characters) is added to
+  /// the name of the log entry. An action with options always goes over Bluetooth.
+  void set_action_options(bool force, bool auto_unlock, const std::string &name_suffix) {
+    this->action_flags_ = (auto_unlock ? 1 : 0) | (force ? 2 : 0);
+    this->action_suffix_ = name_suffix.substr(0, 19);
+  }
+  /// Replaces the security PIN of the configuration until it is set to 0 again. Kept in flash.
+  void override_security_pin(uint32_t pin);
+  template<typename F> void add_on_paired_callback(F &&callback) { this->paired_callback_.add(std::forward<F>(callback)); }
+  template<typename F> void add_on_pairing_mode_callback(F &&callback) {
+    this->pairing_mode_callback_.add(std::forward<F>(callback));
+  }
 
   /// The device state for a lock entity
   virtual lock::LockState entity_state() const = 0;
@@ -471,6 +484,13 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   text_sensor::TextSensor *last_user_text_sensor_{nullptr};
   std::vector<std::pair<std::string, text_sensor::TextSensor *>> topic_text_sensors_;
 #endif
+  uint8_t action_flags_{0};
+  std::string action_suffix_;
+  uint32_t configured_pin_{0};
+  ESPPreferenceObject pin_override_pref_;
+  CallbackManager<void()> paired_callback_;
+  CallbackManager<void(bool)> pairing_mode_callback_;
+  void apply_security_pin_();
   struct JsonListener {
     std::string suffix;
     std::function<void(JsonObjectConst)> callback;

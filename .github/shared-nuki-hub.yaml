@@ -61,6 +61,12 @@ nuki_hub:
       send_actions: true
       fallback_timeout: 3s
     door_sensor_input: reed_switch
+    on_paired:
+      - logger.log: "YAML: paired"
+    on_pairing_mode_on:
+      - logger.log: "YAML: pairing mode on"
+    on_pairing_mode_off:
+      - logger.log: "YAML: pairing mode off"
     debug:
       communication: true
 
@@ -89,6 +95,19 @@ button:
     name: Unpair
     on_press:
       - nuki_hub.unpair: smartlock
+  - platform: template
+    name: Unlock for the doorbell
+    on_press:
+      - nuki_hub.set_action_options:
+          id: smartlock
+          force: true
+          name_suffix: Doorbell
+      - nuki_hub.action:
+          id: smartlock
+          action: unlock
+      - nuki_hub.set_security_pin:
+          id: smartlock
+          security_pin: 4321
   - platform: nuki_hub
     nuki_hub_id: smartlock
     unpair:
@@ -143,6 +162,8 @@ switch:
       name: "Lock slow_speed_during_night_mode_enabled"
     detached_cylinder_enabled:
       name: "Lock detached_cylinder_enabled"
+    logging_enabled:
+      name: "Lock logging_enabled"
     button_enabled:
       name: "Lock button_enabled"
   - platform: nuki_hub

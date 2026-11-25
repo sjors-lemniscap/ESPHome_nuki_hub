@@ -29,6 +29,43 @@ template<typename... Ts> class NukiHubCommandAction : public Action<Ts...>, publ
   void play(const Ts &...x) override { this->parent_->command(this->topic_.value(x...), this->payload_.value(x...)); }
 };
 
+template<typename... Ts> class NukiHubActionOptionsAction : public Action<Ts...>, public Parented<NukiHubComponent> {
+ public:
+  TEMPLATABLE_VALUE(bool, force)
+  TEMPLATABLE_VALUE(bool, auto_unlock)
+  TEMPLATABLE_VALUE(std::string, name_suffix)
+  void play(const Ts &...x) override {
+    this->parent_->set_action_options(this->force_.value(x...), this->auto_unlock_.value(x...),
+                                      this->name_suffix_.value(x...));
+  }
+};
+
+template<typename... Ts> class NukiHubSecurityPinAction : public Action<Ts...>, public Parented<NukiHubComponent> {
+ public:
+  TEMPLATABLE_VALUE(uint32_t, security_pin)
+  void play(const Ts &...x) override { this->parent_->override_security_pin(this->security_pin_.value(x...)); }
+};
+
+/// Fires when a pairing was made (not at a start with a pairing that is already there)
+class NukiHubPairedTrigger : public Trigger<> {
+ public:
+  explicit NukiHubPairedTrigger(NukiHubComponent *parent) {
+    parent->add_on_paired_callback([this] { this->trigger(); });
+  }
+};
+
+/// Fires when pairing mode goes on (or, with `on` false, off)
+class NukiHubPairingModeTrigger : public Trigger<> {
+ public:
+  NukiHubPairingModeTrigger(NukiHubComponent *parent, bool on) {
+    parent->add_on_pairing_mode_callback([this, on](bool enabled) {
+      if (enabled == on) {
+        this->trigger();
+      }
+    });
+  }
+};
+
 /// Fires for everything the device publishes: `topic` below `<prefix>/<kind>`, and the payload
 class NukiHubMessageTrigger : public Trigger<std::string, std::string> {
  public:
