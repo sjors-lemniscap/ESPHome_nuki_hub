@@ -5,13 +5,11 @@ Two ESPHome components that turn an ESP32 into a local Bluetooth bridge for Nuki
 - **[`nuki_hub`](docs/nuki_hub.md)** puts a Nuki **Opener** or Smart Lock on MQTT with the topics and payloads of [Nuki Hub](https://github.com/technyon/nuki_hub): lock actions, keypad codes with time limits, time control, authorizations, settings and the activity log, each command answered with a result. Software written against Nuki Hub keeps working, and an existing Nuki Hub pairing can be [taken over](docs/migrating_from_nuki_hub.md).
 - **`nuki_lock`** is the lock platform of [uriyacovy/ESPHome_nuki_lock](https://github.com/uriyacovy/ESPHome_nuki_lock), which this repository is a fork of: a Smart Lock in Home Assistant with [many entities](#-entities). It is described from [Requirements](#-requirements) on.
 
-The work is on the **`nuki-hub`** branch, so name it in `external_components` (`@nuki-hub`, as in the examples below).
-
 ## nuki_hub in short
 
 ```yaml
 external_components:
-  - source: github://sjors-lemniscap/ESPHome_nuki_hub@nuki-hub
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
     components: [nuki_lock, nuki_hub]
 
 esp32_ble_tracker:
@@ -119,7 +117,7 @@ api:
 logger:
 
 external_components:
-  - source: github://sjors-lemniscap/ESPHome_nuki_hub@nuki-hub
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
 
 lock:
   - platform: nuki_lock
@@ -168,7 +166,7 @@ api:
   homeassistant_services: true
 
 external_components:
-  - source: github://sjors-lemniscap/ESPHome_nuki_hub@nuki-hub
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
 
 # Optional: external door state input for the `door_sensor_input` feature below.
 # This binary_sensor reflects the physical door (false = closed, true = open) and

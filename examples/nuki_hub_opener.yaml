@@ -20,7 +20,7 @@ ota:
     password: !secret ota_password
 
 external_components:
-  - source: github://sjors-lemniscap/ESPHome_nuki_hub@nuki-hub
+  - source: github://sjors-lemniscap/ESPHome_nuki_hub
     components: [nuki_lock, nuki_hub]
 
 esp32_ble_tracker:
