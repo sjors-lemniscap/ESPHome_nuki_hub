@@ -11,6 +11,7 @@ jobs:
     name: Build Nightly
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         config:
           - file: .github/idf-nuki-hub.yaml
