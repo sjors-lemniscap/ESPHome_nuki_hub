@@ -2,7 +2,7 @@
  * @file nuki_opener_protocol.cpp
  * Communication with a Nuki Opener, the counterpart of nuki_lock_protocol.cpp
  *
- * Ported from NukiBleEsp32 (NukiOpener.cpp), GNU GENERAL PUBLIC LICENSE (see LICENSE)
+ * Ported from NukiBleEsp32 (NukiOpener.cpp), MIT (see LICENSE)
  */
 
 #include "nuki_opener_protocol.h"

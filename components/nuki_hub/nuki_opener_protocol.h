@@ -3,7 +3,7 @@
  * @file nuki_opener_protocol.h
  * Communication with a Nuki Opener, the counterpart of nuki_lock_protocol.h
  *
- * Ported from NukiBleEsp32 (NukiOpener.h), GNU GENERAL PUBLIC LICENSE (see LICENSE)
+ * Ported from NukiBleEsp32 (NukiOpener.h), MIT (see LICENSE)
  *
  * Every method that talks to the Opener performs one step per call and returns
  * CmdResult::Working until it is done, like the methods of NukiLock.

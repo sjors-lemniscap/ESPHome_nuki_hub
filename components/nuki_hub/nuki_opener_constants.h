@@ -4,7 +4,7 @@
  * Data types of the Nuki Opener, based on the Nuki Opener Bluetooth API
  * https://developer.nuki.io/page/nuki-opener-api-1/7/
  *
- * Ported from NukiBleEsp32 (NukiOpenerConstants.h), GNU GENERAL PUBLIC LICENSE (see LICENSE)
+ * Ported from NukiBleEsp32 (NukiOpenerConstants.h), MIT (see LICENSE)
  */
 
 #include "nuki_ble_constants.h"
