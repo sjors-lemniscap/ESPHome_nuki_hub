@@ -177,6 +177,7 @@ void NukiHubComponent::setup() {
   } else {
     ESP_LOGI(TAG, "Not paired with a Nuki %s yet, enable the pairing mode to pair", this->kind());
     ble->set_pairing_mode_active(this->pairing_mode_);
+    this->arm_pairing_mode_timeout_();
   }
 
   if (this->interval_state_ > 0) {
@@ -1487,11 +1488,25 @@ void NukiHubComponent::override_security_pin(uint32_t pin) {
   this->state_callback_.call();
 }
 
+void NukiHubComponent::arm_pairing_mode_timeout_() {
+  if (!this->pairing_mode_ || this->pairing_mode_timeout_ == 0) {
+    this->cancel_timeout("pairing_mode");
+    return;
+  }
+  this->set_timeout("pairing_mode", this->pairing_mode_timeout_, [this] {
+    if (this->pairing_mode_) {
+      ESP_LOGW(TAG, "No Nuki %s was paired in time", this->kind());
+      this->set_pairing_mode(false);
+    }
+  });
+}
+
 void NukiHubComponent::set_pairing_mode(bool enabled) {
   const bool changed = this->pairing_mode_ != enabled;
   this->pairing_mode_ = enabled;
   this->ble()->set_pairing_mode_active(enabled);
   ESP_LOGI(TAG, "Pairing mode %s", enabled ? "on" : "off");
+  this->arm_pairing_mode_timeout_();
   this->state_callback_.call();
   if (changed) {
     this->pairing_mode_callback_.call(enabled);

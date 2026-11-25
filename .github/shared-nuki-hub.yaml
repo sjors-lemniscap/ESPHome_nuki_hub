@@ -61,6 +61,7 @@ nuki_hub:
       send_actions: true
       fallback_timeout: 3s
     door_sensor_input: reed_switch
+    pairing_mode_timeout: 300s
     on_paired:
       - logger.log: "YAML: paired"
     on_pairing_mode_on:

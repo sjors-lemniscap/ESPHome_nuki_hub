@@ -72,6 +72,7 @@ nuki_hub:
 | `security_pin` | `0` | The PIN set in the Nuki app. Needed for the keypad, authorizations, time control, the activity log and settings |
 | `pairing_as_app` | `false` | Pair as an app instead of as a bridge |
 | `pairing_mode_at_boot` | `false` | Look for a Nuki device in pairing mode while not paired |
+| `pairing_mode_timeout` | `0s` | Pairing mode switches itself off after this time. `0s`: it stays on until a device was paired |
 | `pairing` | | Take over an existing pairing, see [Pairing](#pairing) |
 | `keypad_control` | `true` | Accept keypad commands |
 | `keypad_publish_code` | `false` | Include the codes themselves in `keypad/json` |

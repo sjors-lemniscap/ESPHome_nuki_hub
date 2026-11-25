@@ -157,6 +157,7 @@ CONF_OFFLINE_UPDATE_INTERVAL = "offline_update_interval"
 CONF_AUTHORIZATION_ADD = "authorization_add"
 CONF_DOOR_SENSOR_INPUT = "door_sensor_input"
 CONF_ON_PAIRED = "on_paired"
+CONF_PAIRING_MODE_TIMEOUT = "pairing_mode_timeout"
 CONF_ON_PAIRING_MODE_ON = "on_pairing_mode_on"
 CONF_ON_PAIRING_MODE_OFF = "on_pairing_mode_off"
 CONF_FORCE = "force"
@@ -223,6 +224,8 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_SECURITY_PIN, default=0): cv.int_range(min=0, max=999999),
             cv.Optional(CONF_PAIRING_AS_APP, default=False): cv.boolean,
             cv.Optional(CONF_PAIRING_MODE_AT_BOOT, default=False): cv.boolean,
+            # 0s: pairing mode stays on until a device was paired or it is switched off
+            cv.Optional(CONF_PAIRING_MODE_TIMEOUT, default="0s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_PAIRING): cv.Schema(
                 {
                     cv.Required(CONF_BLE_ADDRESS): cv.mac_address,
@@ -414,6 +417,7 @@ async def to_code(config):
     cg.add(var.set_security_pin(config[CONF_SECURITY_PIN]))
     cg.add(var.set_pairing_as_app(config[CONF_PAIRING_AS_APP]))
     cg.add(var.set_pairing_mode_at_boot(config[CONF_PAIRING_MODE_AT_BOOT]))
+    cg.add(var.set_pairing_mode_timeout(config[CONF_PAIRING_MODE_TIMEOUT]))
     if pairing := config.get(CONF_PAIRING):
         cg.add(
             var.set_import_credentials(

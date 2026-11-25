@@ -243,6 +243,8 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
     this->json_listeners_.push_back({suffix, std::move(callback)});
   }
   bool pairing_mode() const { return this->pairing_mode_; }
+  /// Pairing mode switches itself off after this time, 0 for never
+  void set_pairing_mode_timeout(uint32_t ms) { this->pairing_mode_timeout_ = ms; }
   /// For the next lock action only: `force` skips the device's own checks, `auto_unlock` marks
   /// it as an automatic unlock in the activity log, `name_suffix` (19 characters) is added to
   /// the name of the log entry. An action with options always goes over Bluetooth.
@@ -485,6 +487,8 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   std::vector<std::pair<std::string, text_sensor::TextSensor *>> topic_text_sensors_;
 #endif
   uint8_t action_flags_{0};
+  uint32_t pairing_mode_timeout_{0};
+  void arm_pairing_mode_timeout_();
   std::string action_suffix_;
   uint32_t configured_pin_{0};
   ESPPreferenceObject pin_override_pref_;

@@ -28,7 +28,7 @@ over the ESPHome API alone.
 | `security_pin`, `pairing_as_app`, `ble_general_timeout`, `ble_command_timeout`, `command_retries`, `command_retry_delay`, `query_interval_config` | the same in `nuki_hub:` (`security_pin` is not templatable) |
 | `query_interval_auth_data` | `query_interval_authorizations` |
 | `query_interval_battery_report` | `query_interval_battery` |
-| `pairing_mode_timeout` | none: pairing mode stays on until paired or switched off |
+| `pairing_mode_timeout` | the same, but off (`0s`) unless set; there it is `300s` |
 | `hybrid_mode` | `hybrid_mode`, see [nuki_hub.md](nuki_hub.md#hybrid-mode) |
 | `door_sensor_input` | `door_sensor_input`, see [nuki_hub.md](nuki_hub.md#door-sensor-emulation) |
 | `event` | `api_transport: true` sends everything published as the event `esphome.nuki_hub`; the activity log entries are the topics `/event/action` and `/event/keypad` |
@@ -80,7 +80,6 @@ How topics become entities is in [Entities from topics](home_assistant.md#entiti
 
 ## Not here
 
-- `pairing_mode_timeout`.
 - The Home Assistant event in ESPHome Nuki Lock's format: the entries arrive with the names
   Nuki Hub uses.
 
