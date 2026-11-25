@@ -132,6 +132,7 @@ void NukiHubComponent::setup() {
   ble->set_fast_connection(this->fast_connection_);
   ble->set_general_timeout(this->ble_general_timeout_);
   ble->set_command_timeout(this->ble_command_timeout_);
+  ble->set_action_timeout(this->ble_action_timeout_);
 
   if (!ble->is_paired_with_lock() && this->import_address_.size() == 6 && this->import_key_.size() == 32 &&
       this->import_auth_id_.size() == 4) {

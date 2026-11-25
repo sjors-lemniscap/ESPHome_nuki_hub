@@ -106,7 +106,8 @@ nuki_hub:
 | `command_retries` | `3` | Retries of a command that got no answer |
 | `command_retry_delay` | `1s` | |
 | `ble_general_timeout` | `10s` | |
-| `ble_command_timeout` | `3s` | |
+| `ble_command_timeout` | `3s` | How long the device may take to answer a command |
+| `ble_action_timeout` | `15s` | How long an accepted action (lock, unlock, open) may take to complete |
 | `time_id` | | A `time` component, for `update_time` |
 | `update_time` | `false` | Set the clock of the Nuki device at boot and with every config query |
 | `publish_maintenance` | `true` | Publish the `<prefix>/maintenance/...` and `<prefix>/info/...` topics |

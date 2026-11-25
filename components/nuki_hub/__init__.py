@@ -121,6 +121,7 @@ CONF_COMMAND_RETRIES = "command_retries"
 CONF_COMMAND_RETRY_DELAY = "command_retry_delay"
 CONF_BLE_GENERAL_TIMEOUT = "ble_general_timeout"
 CONF_BLE_COMMAND_TIMEOUT = "ble_command_timeout"
+CONF_BLE_ACTION_TIMEOUT = "ble_action_timeout"
 CONF_UPDATE_TIME = "update_time"
 CONF_PUBLISH_MAINTENANCE = "publish_maintenance"
 CONF_MQTT_LOG = "mqtt_log"
@@ -243,6 +244,7 @@ _BASE_SCHEMA = (
             cv.Optional(CONF_COMMAND_RETRY_DELAY, default="1s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_BLE_GENERAL_TIMEOUT, default="10s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_BLE_COMMAND_TIMEOUT, default="3s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_BLE_ACTION_TIMEOUT, default="15s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TIME_ID): cv.use_id(time_.RealTimeClock),
             cv.Optional(CONF_UPDATE_TIME, default=False): cv.boolean,
             cv.Optional(CONF_PUBLISH_MAINTENANCE, default=True): cv.boolean,
@@ -419,6 +421,7 @@ async def to_code(config):
     cg.add(var.set_command_retry_delay(config[CONF_COMMAND_RETRY_DELAY]))
     cg.add(var.set_ble_general_timeout(config[CONF_BLE_GENERAL_TIMEOUT]))
     cg.add(var.set_ble_command_timeout(config[CONF_BLE_COMMAND_TIMEOUT]))
+    cg.add(var.set_ble_action_timeout(config[CONF_BLE_ACTION_TIMEOUT]))
     cg.add(var.set_update_time(config[CONF_UPDATE_TIME]))
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))

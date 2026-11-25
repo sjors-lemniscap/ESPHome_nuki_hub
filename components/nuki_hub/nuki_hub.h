@@ -144,6 +144,7 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   void set_command_retry_delay(uint32_t ms) { this->command_retry_delay_ = ms; }
   void set_ble_general_timeout(uint32_t ms) { this->ble_general_timeout_ = ms; }
   void set_ble_command_timeout(uint32_t ms) { this->ble_command_timeout_ = ms; }
+  void set_ble_action_timeout(uint32_t ms) { this->ble_action_timeout_ = ms; }
   void set_update_time(bool enabled) { this->update_time_ = enabled; }
   void set_publish_maintenance(bool enabled) { this->maintenance_enabled_ = enabled; }
   void set_mqtt_log_level(uint8_t level) { this->mqtt_log_level_ = level; }
@@ -420,6 +421,7 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   uint32_t command_retry_delay_{1000};
   uint32_t ble_general_timeout_{10000};
   uint32_t ble_command_timeout_{3000};
+  uint32_t ble_action_timeout_{15000};
   bool update_time_{false};
   bool maintenance_enabled_{true};
   uint8_t mqtt_log_level_{0};
