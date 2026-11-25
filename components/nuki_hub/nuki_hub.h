@@ -157,6 +157,10 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
     this->keypad_battery_critical_binary_sensor_ = s;
   }
   void set_ring_binary_sensor(binary_sensor::BinarySensor *s) { this->ring_binary_sensor_ = s; }
+  void set_paired_binary_sensor(binary_sensor::BinarySensor *s) { this->paired_binary_sensor_ = s; }
+  /// On while the key of a JSON topic has the value payload_on ("1" also for true)
+  void add_json_binary_sensor(const std::string &topic, const std::string &key, const std::string &payload_on,
+                              binary_sensor::BinarySensor *s);
   void add_topic_binary_sensor(const std::string &topic, const std::string &payload_on, binary_sensor::BinarySensor *s) {
     this->topic_binary_sensors_.push_back({topic, payload_on, s});
   }
@@ -165,6 +169,7 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
   void add_topic_sensor(const std::string &topic, sensor::Sensor *s) { this->topic_sensors_.emplace_back(topic, s); }
   void set_keypad_entries_sensor(sensor::Sensor *s) { this->keypad_entries_sensor_ = s; }
+  void add_json_sensor(const std::string &topic, const std::string &key, sensor::Sensor *s);
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_state_text_sensor(text_sensor::TextSensor *s) { this->state_text_sensor_ = s; }
@@ -172,6 +177,7 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
     this->topic_text_sensors_.emplace_back(topic, s);
   }
   void set_last_user_text_sensor(text_sensor::TextSensor *s) { this->last_user_text_sensor_ = s; }
+  void add_json_text_sensor(const std::string &topic, const std::string &key, text_sensor::TextSensor *s);
 #endif
   void set_ble_disconnect_timeout(uint32_t ms) { this->ble_disconnect_timeout_ = ms; }
   void set_keep_connected(bool enable) { this->keep_connected_ = enable; }
@@ -219,6 +225,25 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
     this->raw_message_hook_ = std::move(hook);
   }
 
+  /// A setting of the Nuki device: a key of the configuration topics, written through
+  /// configuration/action. A switch if min == max and there are no options.
+  struct DiscoverySetting {
+    const char *key;
+    const char *name;
+    bool advanced;
+    int32_t min;
+    int32_t max;
+    /// The choices of a select, by the names the configuration topics use
+    std::vector<const char *> options{};
+  };
+  /// Looks a setting up by its key. False if this kind of device has no such setting.
+  bool setting_info(const std::string &key, DiscoverySetting &out) const;
+  /// Called with every JSON object published on the topic `suffix` ("/configuration/basicJson")
+  void add_json_listener(const std::string &suffix, std::function<void(JsonObjectConst)> &&callback) {
+    this->json_listeners_.push_back({suffix, std::move(callback)});
+  }
+  bool pairing_mode() const { return this->pairing_mode_; }
+
   /// The device state for a lock entity
   virtual lock::LockState entity_state() const = 0;
   /// The action a lock entity asks for when locking, unlocking or opening
@@ -253,15 +278,6 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   virtual void describe_for_discovery(JsonObject lock) = 0;
   virtual bool has_ring() const { return false; }
   /// A setting announced to Home Assistant: a switch, a number when max > min, a select with options
-  struct DiscoverySetting {
-    const char *key;
-    const char *name;
-    bool advanced;
-    int32_t min;
-    int32_t max;
-    /// The choices of a select, by the names the configuration topics use
-    std::vector<const char *> options{};
-  };
   virtual std::vector<DiscoverySetting> discovery_settings() const { return {}; }
 
   // --- shared machinery -----------------------------------------------------------------
@@ -437,6 +453,7 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   binary_sensor::BinarySensor *battery_critical_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *keypad_battery_critical_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *ring_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *paired_binary_sensor_{nullptr};
   struct TopicBinarySensor {
     std::string topic;
     std::string payload_on;
@@ -454,6 +471,11 @@ class NukiHubComponent : public Component, public SmartlockEventHandler {
   text_sensor::TextSensor *last_user_text_sensor_{nullptr};
   std::vector<std::pair<std::string, text_sensor::TextSensor *>> topic_text_sensors_;
 #endif
+  struct JsonListener {
+    std::string suffix;
+    std::function<void(JsonObjectConst)> callback;
+  };
+  std::vector<JsonListener> json_listeners_;
   ESPPreferenceObject log_marker_pref_;
   uint32_t ble_disconnect_timeout_{2000};
   /// The connection stays open: always (`keep_connected`), or until `hold_until_` (`connection/hold`)

@@ -13,6 +13,10 @@ class NukiHubLock : public NukiHubComponent {
   NukiBle *ble() override { return &this->nuki_lock_; }
   NukiLock *get_nuki_lock() { return &this->nuki_lock_; }
   const char *kind() const override { return "lock"; }
+#ifdef USE_BINARY_SENSOR
+  /// On (door open) and off (closed) are reported to the lock in place of a Nuki door sensor
+  void set_door_sensor_input(binary_sensor::BinarySensor *sensor) { this->door_sensor_input_ = sensor; }
+#endif
 
   const KeyTurnerState &state() const { return this->state_; }
   bool state_known() const { return this->state_known_; }
@@ -79,6 +83,14 @@ class NukiHubLock : public NukiHubComponent {
   void hybrid_action_failed_(const char *reason);
 
   NukiLock nuki_lock_;
+
+#ifdef USE_BINARY_SENSOR
+  // Door sensor emulation: the state of a binary sensor is reported to the lock as its door sensor
+  binary_sensor::BinarySensor *door_sensor_input_{nullptr};
+  bool door_report_pending_{false};
+  bool door_report_queued_{false};
+  bool door_report_open_{false};
+#endif
 
   bool hybrid_{false};
   bool hybrid_send_actions_{false};

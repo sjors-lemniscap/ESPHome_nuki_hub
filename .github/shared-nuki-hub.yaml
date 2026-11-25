@@ -60,6 +60,7 @@ nuki_hub:
     hybrid_mode:
       send_actions: true
       fallback_timeout: 3s
+    door_sensor_input: reed_switch
     debug:
       communication: true
 
@@ -88,3 +89,185 @@ button:
     name: Unpair
     on_press:
       - nuki_hub.unpair: smartlock
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    unpair:
+      name: "Lock unpair"
+    request_calibration:
+      name: "Lock request_calibration"
+    reboot:
+      name: "Lock reboot"
+    query_state:
+      name: "Lock query_state"
+    query_config:
+      name: "Lock query_config"
+    query_battery:
+      name: "Lock query_battery"
+    query_keypad:
+      name: "Lock query_keypad"
+
+switch:
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    pairing_mode:
+      name: "Lock pairing_mode"
+    bluetooth_pairing_enabled:
+      name: "Lock bluetooth_pairing_enabled"
+    auto_unlatch:
+      name: "Lock auto_unlatch"
+    led_enabled:
+      name: "Lock led_enabled"
+    night_mode_enabled:
+      name: "Lock night_mode_enabled"
+    night_mode_auto_lock_enabled:
+      name: "Lock night_mode_auto_lock_enabled"
+    night_mode_auto_unlock_disabled:
+      name: "Lock night_mode_auto_unlock_disabled"
+    night_mode_immediate_lock_on_start_enabled:
+      name: "Lock night_mode_immediate_lock_on_start_enabled"
+    auto_lock_enabled:
+      name: "Lock auto_lock_enabled"
+    auto_unlock_disabled:
+      name: "Lock auto_unlock_disabled"
+    immediate_auto_lock_enabled:
+      name: "Lock immediate_auto_lock_enabled"
+    auto_update_enabled:
+      name: "Lock auto_update_enabled"
+    single_lock_enabled:
+      name: "Lock single_lock_enabled"
+    dst_mode_enabled:
+      name: "Lock dst_mode_enabled"
+    auto_battery_type_detection_enabled:
+      name: "Lock auto_battery_type_detection_enabled"
+    slow_speed_during_night_mode_enabled:
+      name: "Lock slow_speed_during_night_mode_enabled"
+    detached_cylinder_enabled:
+      name: "Lock detached_cylinder_enabled"
+    button_enabled:
+      name: "Lock button_enabled"
+  - platform: nuki_hub
+    nuki_hub_id: opener
+    pairing_mode:
+      name: "Opener pairing_mode"
+    button_enabled:
+      name: "Opener button_enabled"
+    disable_rto_after_ring:
+      name: "Opener disable_rto_after_ring"
+    led_flash_enabled:
+      name: "Opener led_flash_enabled"
+    random_electric_strike_delay:
+      name: "Opener random_electric_strike_delay"
+    sound_confirmation:
+      name: "Opener sound_confirmation"
+
+number:
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    led_brightness:
+      name: "Lock led_brightness"
+    timezone_offset:
+      name: "Lock timezone_offset"
+    lock_n_go_timeout:
+      name: "Lock lock_n_go_timeout"
+    auto_lock_timeout:
+      name: "Lock auto_lock_timeout"
+    unlatch_duration:
+      name: "Lock unlatch_duration"
+    unlocked_position_offset:
+      name: "Lock unlocked_position_offset"
+    locked_position_offset:
+      name: "Lock locked_position_offset"
+    single_locked_position_offset:
+      name: "Lock single_locked_position_offset"
+    unlocked_to_locked_transition_offset:
+      name: "Lock unlocked_to_locked_transition_offset"
+  - platform: nuki_hub
+    nuki_hub_id: opener
+    doorbell_suppression_duration:
+      name: "Opener doorbell_suppression_duration"
+    electric_strike_delay:
+      name: "Opener electric_strike_delay"
+    electric_strike_duration:
+      name: "Opener electric_strike_duration"
+    rto_timeout:
+      name: "Opener rto_timeout"
+    sound_level:
+      name: "Opener sound_level"
+
+select:
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    advertising_mode:
+      name: "Lock advertising_mode"
+    battery_type:
+      name: "Lock battery_type"
+    double_buton_press_action:
+      name: "Lock double_buton_press_action"
+    fob_action_1:
+      name: "Lock fob_action_1"
+    fob_action_2:
+      name: "Lock fob_action_2"
+    fob_action_3:
+      name: "Lock fob_action_3"
+    motor_speed:
+      name: "Lock motor_speed"
+    single_buton_press_action:
+      name: "Lock single_buton_press_action"
+    timezone:
+      name: "Lock timezone"
+  - platform: nuki_hub
+    nuki_hub_id: opener
+    doorbell_suppression:
+      name: "Opener doorbell_suppression"
+    double_button_press_action:
+      name: "Opener double_button_press_action"
+    fob_action_1:
+      name: "Opener fob_action_1"
+    fob_action_2:
+      name: "Opener fob_action_2"
+    fob_action_3:
+      name: "Opener fob_action_3"
+    single_button_press_action:
+      name: "Opener single_button_press_action"
+    sound_cm:
+      name: "Opener sound_cm"
+    sound_open:
+      name: "Opener sound_open"
+    sound_ring:
+      name: "Opener sound_ring"
+    sound_rto:
+      name: "Opener sound_rto"
+
+binary_sensor:
+  - platform: template
+    id: reed_switch
+    name: Door contact
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    paired:
+      name: Lock paired
+    available:
+      name: Lock connected
+    topics:
+      - name: Lock battery charging
+        topic: /battery/basicJson
+        key: charging
+      - name: Lock door open
+        topic: /doorSensorState
+        payload_on: doorOpened
+
+sensor:
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    topics:
+      - name: Lock battery level
+        topic: /battery/basicJson
+        key: level
+
+text_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: smartlock
+    topics:
+      - name: Lock last action
+        topic: /json
+        key: last_lock_action

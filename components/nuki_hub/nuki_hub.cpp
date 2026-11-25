@@ -385,6 +385,65 @@ void NukiHubComponent::update_topic_entities_(const char *suffix, const char *pa
 #endif
 }
 
+bool NukiHubComponent::setting_info(const std::string &key, DiscoverySetting &out) const {
+  for (auto &setting : this->discovery_settings()) {
+    if (key == setting.key) {
+      out = setting;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Entities that follow one key of a JSON topic (topics: with key:)
+static std::string json_text(JsonVariantConst value) {
+  if (value.is<const char *>()) {
+    return value.as<const char *>();
+  }
+  if (value.is<bool>()) {
+    return value.as<bool>() ? "1" : "0";
+  }
+  std::string out;
+  serializeJson(value, out);
+  return out;
+}
+
+#ifdef USE_BINARY_SENSOR
+void NukiHubComponent::add_json_binary_sensor(const std::string &topic, const std::string &key,
+                                              const std::string &payload_on, binary_sensor::BinarySensor *s) {
+  this->add_json_listener(topic, [key, payload_on, s](JsonObjectConst json) {
+    JsonVariantConst value = json[key];
+    if (!value.isNull()) {
+      s->publish_state(json_text(value) == payload_on);
+    }
+  });
+}
+#endif
+#ifdef USE_SENSOR
+void NukiHubComponent::add_json_sensor(const std::string &topic, const std::string &key, sensor::Sensor *s) {
+  this->add_json_listener(topic, [key, s](JsonObjectConst json) {
+    JsonVariantConst value = json[key];
+    if (value.is<float>()) {
+      s->publish_state(value.as<float>());
+    }
+  });
+}
+#endif
+#ifdef USE_TEXT_SENSOR
+void NukiHubComponent::add_json_text_sensor(const std::string &topic, const std::string &key,
+                                            text_sensor::TextSensor *s) {
+  this->add_json_listener(topic, [key, s](JsonObjectConst json) {
+    JsonVariantConst value = json[key];
+    if (!value.isNull()) {
+      const std::string text = json_text(value);
+      if (s->state != text) {
+        s->publish_state(text);
+      }
+    }
+  });
+}
+#endif
+
 // Everything a device publishes goes through here. The payload is not copied on the way, a
 // keypad list can be tens of kilobytes and all of this lives in the internal RAM.
 bool NukiHubComponent::publish_(const char *suffix, const char *payload, size_t length, bool retain) {
@@ -413,6 +472,13 @@ bool NukiHubComponent::publish_int_(const char *suffix, int64_t value, bool reta
 }
 
 bool NukiHubComponent::publish_json_(const char *suffix, JsonDocument &doc, bool retain) {
+  if (!this->json_listeners_.empty() && doc.is<JsonObjectConst>()) {
+    for (auto &listener : this->json_listeners_) {
+      if (listener.suffix == suffix) {
+        listener.callback(doc.as<JsonObjectConst>());
+      }
+    }
+  }
   // Written once into a buffer of the right size, in PSRAM where there is one. Without the
   // memory for it nothing is published: better than the abort a failed std::string would be.
   this->last_publish_too_large_ = false;
@@ -1550,6 +1616,9 @@ void NukiHubComponent::update_entities_() {
 #ifdef USE_BINARY_SENSOR
   if (this->available_binary_sensor_ != nullptr) {
     this->available_binary_sensor_->publish_state(this->available_);
+  }
+  if (this->paired_binary_sensor_ != nullptr) {
+    this->paired_binary_sensor_->publish_state(this->is_paired());
   }
   if (this->available_ && this->battery_critical_binary_sensor_ != nullptr) {
     this->battery_critical_binary_sensor_->publish_state(this->battery_critical());

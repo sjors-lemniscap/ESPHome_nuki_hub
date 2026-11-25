@@ -93,6 +93,7 @@ nuki_hub:
 | `challenge_prefetch` | on for an Opener, off for a Smart Lock | Ask for the challenge of the next command when one is done, so the next one goes out at once. Not tried on a Smart Lock. Switches itself off until the restart when the device refuses two commands sent this way |
 | `mqtt_commands` | `true` | `false`: the broker only gets what the device publishes, nothing sent to it is taken as a command. For commands over the API only (`api_transport`), with MQTT kept for watching. The entities of Home Assistant's MQTT discovery can then not switch anything |
 | `hybrid_mode` | off | `type: lock` only: use the lock's own MQTT for state changes and, with `send_actions`, for lock actions, see [Hybrid mode](#hybrid-mode) |
+| `door_sensor_input` | | Smart Lock: a `binary_sensor` reported to the lock as its door sensor, see [door sensor emulation](#door-sensor-emulation) |
 | `publish_activity_log` | `true` | Publish `log`, `shortLog`, `rollingLog` |
 | `max_keypad_entries` | `100` | Entries read from the keypad |
 | `max_authorization_entries` | `20` | Authorizations read |
@@ -197,6 +198,29 @@ can operate the lock: restrict that topic on the broker to the lock and the ESP3
 
 Hybrid mode has not been run on a lock: it compiles and follows the code ESPHome Nuki Lock
 uses for it.
+
+## Door sensor emulation
+
+A Smart Lock can be told the state of the door by the ESP32, in place of a Nuki Door Sensor
+(a reed contact on a GPIO, a sensor from Home Assistant, anything that is a `binary_sensor`).
+On means open. The state is sent to the lock when the ESP32 starts and on every change.
+
+```yaml
+binary_sensor:
+  - platform: gpio
+    pin: GPIO39
+    id: reed_switch
+    name: Door contact
+
+nuki_hub:
+  - id: front_door
+    type: lock
+    topic_prefix: home
+    door_sensor_input: reed_switch
+```
+
+The lock then reports the door on `doorSensorState` like it does with its own sensor. The
+emulated sensor is not shown in the Nuki app. Not run on a device here.
 
 ## Security
 

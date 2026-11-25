@@ -11,6 +11,7 @@ CONF_STATE = "state"
 CONF_LAST_USER = "last_user"
 CONF_TOPICS = "topics"
 CONF_TOPIC = "topic"
+CONF_KEY = "key"
 
 
 def _topic(value):
@@ -27,8 +28,11 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_STATE): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_LAST_USER): text_sensor.text_sensor_schema(icon="mdi:account"),
         # Anything the device publishes as a text sensor: /trigger, /doorSensorState, ...
+        # With key: one value of a JSON topic, /json and last_lock_action
         cv.Optional(CONF_TOPICS): cv.ensure_list(
-            text_sensor.text_sensor_schema().extend({cv.Required(CONF_TOPIC): _topic})
+            text_sensor.text_sensor_schema().extend(
+                {cv.Required(CONF_TOPIC): _topic, cv.Optional(CONF_KEY): cv.string_strict}
+            )
         ),
     }
 )
@@ -42,4 +46,7 @@ async def to_code(config):
             cg.add(getattr(parent, f"set_{key}_text_sensor")(var))
     for conf in config.get(CONF_TOPICS, []):
         var = await text_sensor.new_text_sensor(conf)
-        cg.add(parent.add_topic_text_sensor(conf[CONF_TOPIC], var))
+        if CONF_KEY in conf:
+            cg.add(parent.add_json_text_sensor(conf[CONF_TOPIC], conf[CONF_KEY], var))
+        else:
+            cg.add(parent.add_topic_text_sensor(conf[CONF_TOPIC], var))

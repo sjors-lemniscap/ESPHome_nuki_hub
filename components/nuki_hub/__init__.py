@@ -10,7 +10,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
 from esphome import automation
-from esphome.components import esp32_ble, esp32_ble_tracker, logger, time as time_
+from esphome.components import binary_sensor, esp32_ble, esp32_ble_tracker, logger, time as time_
 from esphome.components.esp32_ble import BTLoggers
 from esphome.components.esp32 import add_idf_component, add_idf_sdkconfig_option, arduino_bundles_libsodium
 from esphome.components.noise import LIBSODIUM_VERSION
@@ -155,6 +155,7 @@ CONF_BLE_FALLBACK = "ble_fallback"
 CONF_FALLBACK_TIMEOUT = "fallback_timeout"
 CONF_OFFLINE_UPDATE_INTERVAL = "offline_update_interval"
 CONF_AUTHORIZATION_ADD = "authorization_add"
+CONF_DOOR_SENSOR_INPUT = "door_sensor_input"
 
 TYPE_OPENER = "opener"
 TYPE_LOCK = "lock"
@@ -311,6 +312,9 @@ CONFIG_SCHEMA = cv.All(
             TYPE_LOCK: _BASE_SCHEMA.extend(
                 {
                     cv.GenerateID(): cv.declare_id(NukiHubLock),
+                    # Door sensor emulation: this binary sensor (on: open) is reported to the lock
+                    # as its door sensor
+                    cv.Optional(CONF_DOOR_SENSOR_INPUT): cv.use_id(binary_sensor.BinarySensor),
                     cv.Optional(CONF_HYBRID_MODE): cv.Schema(
                         {
                             cv.Optional(CONF_TOPIC_PREFIX): cv.All(cv.string_strict, cv.Length(min=1, max=48)),
@@ -426,6 +430,8 @@ async def to_code(config):
     cg.add(var.set_publish_maintenance(config[CONF_PUBLISH_MAINTENANCE]))
     cg.add(var.set_log_marker_in_flash(config[CONF_LOG_MARKER_IN_FLASH]))
     cg.add(var.set_authorization_add(config[CONF_AUTHORIZATION_ADD]))
+    if CONF_DOOR_SENSOR_INPUT in config:
+        cg.add(var.set_door_sensor_input(await cg.get_variable(config[CONF_DOOR_SENSOR_INPUT])))
     if hybrid := config.get(CONF_HYBRID_MODE):
         cg.add(
             var.set_hybrid(

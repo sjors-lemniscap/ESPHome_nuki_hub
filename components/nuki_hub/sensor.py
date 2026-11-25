@@ -17,6 +17,7 @@ CONF_RSSI = "rssi"
 CONF_KEYPAD_ENTRIES = "keypad_entries"
 CONF_TOPICS = "topics"
 CONF_TOPIC = "topic"
+CONF_KEY = "key"
 
 
 def _topic(value):
@@ -40,7 +41,12 @@ CONFIG_SCHEMA = cv.Schema(
             icon="mdi:dialpad", entity_category=ENTITY_CATEGORY_DIAGNOSTIC, accuracy_decimals=0
         ),
         # Any topic with a number as its payload: /rssi, /keypad/count, ...
-        cv.Optional(CONF_TOPICS): cv.ensure_list(sensor.sensor_schema().extend({cv.Required(CONF_TOPIC): _topic})),
+        # With key: one number of a JSON topic, /battery/basicJson and level
+        cv.Optional(CONF_TOPICS): cv.ensure_list(
+            sensor.sensor_schema().extend(
+                {cv.Required(CONF_TOPIC): _topic, cv.Optional(CONF_KEY): cv.string_strict}
+            )
+        ),
     }
 )
 
@@ -53,4 +59,7 @@ async def to_code(config):
             cg.add(getattr(parent, f"set_{key}_sensor")(var))
     for conf in config.get(CONF_TOPICS, []):
         var = await sensor.new_sensor(conf)
-        cg.add(parent.add_topic_sensor(conf[CONF_TOPIC], var))
+        if CONF_KEY in conf:
+            cg.add(parent.add_json_sensor(conf[CONF_TOPIC], conf[CONF_KEY], var))
+        else:
+            cg.add(parent.add_topic_sensor(conf[CONF_TOPIC], var))

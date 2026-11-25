@@ -12,6 +12,7 @@ An ESPHome component that puts a Nuki **Opener** or **Smart Lock** on MQTT with 
 - Optional Home Assistant lock entity and sensors through the ESPHome API, and MQTT discovery
 - The same topics over the ESPHome API for setups without a broker
 - Hybrid mode for Smart Locks with Wi-Fi or Thread: state changes from the lock's own MQTT, the rest over Bluetooth
+- The settings of the Nuki device as switches, numbers and selects in Home Assistant, and door sensor emulation for a Smart Lock
 - An existing Nuki Hub pairing can be [taken over](docs/migrating_from_nuki_hub.md), and given back
 
 ## Supported Nuki devices
@@ -70,6 +71,7 @@ Flash it with `esphome run <file>.yaml`, put the Nuki device in pairing mode (ho
 | [Running it](docs/operations.md) | many rooms, memory, large keypads, what has been tested |
 | [Writing a client](docs/client_guide.md) | how to use the topics well |
 | [Coming from Nuki Hub](docs/migrating_from_nuki_hub.md) | taking over the pairing and going back |
+| [Coming from ESPHome Nuki Lock](docs/coming_from_nuki_lock.md) | every option and entity of `platform: nuki_lock` and where it is here |
 | [Measurements](docs/benchmarks.md) | times and memory on the test rig |
 
 ## Speed and test status
@@ -78,9 +80,9 @@ On the test rig (ESP32-S3, Opener with a Keypad 2) a keypad command takes about 
 
 Everything has been run on an Opener with a Keypad 2 only, see [supported devices](#supported-nuki-devices) and the [test status](docs/operations.md#test-status).
 
-## What is no longer here
+## Coming from ESPHome Nuki Lock
 
-Upstream's `lock: - platform: nuki_lock` (a Smart Lock as a native Home Assistant lock with its settings as entities, hybrid mode and door sensor emulation) was removed from this repository to keep it to one component. For that, use [uriyacovy/ESPHome_nuki_lock](https://github.com/uriyacovy/ESPHome_nuki_lock).
+Upstream's `lock: - platform: nuki_lock` is not in this repository, there is one component. What it offers is here under `nuki_hub`: the Smart Lock as a native Home Assistant lock, its settings as switches, numbers and selects, hybrid mode and door sensor emulation, with or without MQTT. [Coming from ESPHome Nuki Lock](docs/coming_from_nuki_lock.md) lists every option and entity and its counterpart, and the few things that are missing. The YAML is not the same and the lock has to be paired again.
 
 ## License
 

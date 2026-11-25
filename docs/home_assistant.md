@@ -123,12 +123,81 @@ binary_sensor:
 A sensor takes payloads that are a number, a binary sensor is on while the payload equals
 `payload_on` (default `1`).
 
+With `key:` an entity follows one value of a JSON topic:
+
+```yaml
+sensor:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    topics:
+      - topic: /battery/basicJson    # Smart Lock
+        key: level
+        name: Battery
+        unit_of_measurement: "%"
+binary_sensor:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    topics:
+      - topic: /battery/basicJson
+        key: charging
+        name: Battery charging
+```
+
 ### Settings
 
 With MQTT discovery the main settings are announced as switches, numbers and selects of
 the device (LED, button, sounds, timeouts, button and fob actions; for a Smart Lock auto
 lock, night mode, durations, fob and button actions, battery type and motor speed). They read `configuration/basicJson` and
 `configuration/advancedJson` and write through `configuration/action`.
+
+Without a broker the same settings are entities of the ESPHome API. Add the ones you want
+with a name; a key the device type does not have is reported in the log and stays unavailable.
+
+```yaml
+switch:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    pairing_mode:
+      name: Pairing mode
+    auto_lock_enabled:
+      name: Auto lock
+    night_mode_enabled:
+      name: Night mode
+
+number:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    auto_lock_timeout:
+      name: Auto lock timeout
+    led_brightness:
+      name: LED brightness
+
+select:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    single_button_press_action:
+      name: Button, single press
+    motor_speed:
+      name: Motor speed
+
+button:
+  - platform: nuki_hub
+    nuki_hub_id: front_door
+    unpair:
+      name: Unpair
+    request_calibration:
+      name: Calibrate
+```
+
+| Platform | Smart Lock | Opener | Both |
+| --- | --- | --- | --- |
+| `switch` | `bluetooth_pairing_enabled`, `auto_unlatch`, `led_enabled`, `night_mode_enabled`, `night_mode_auto_lock_enabled`, `night_mode_auto_unlock_disabled`, `night_mode_immediate_lock_on_start_enabled`, `auto_lock_enabled`, `auto_unlock_disabled`, `immediate_auto_lock_enabled`, `auto_update_enabled`, `single_lock_enabled`, `dst_mode_enabled`, `auto_battery_type_detection_enabled`, `slow_speed_during_night_mode_enabled`, `detached_cylinder_enabled` | `led_flash_enabled`, `sound_confirmation`, `disable_rto_after_ring`, `random_electric_strike_delay` | `pairing_mode`, `button_enabled` |
+| `number` | `led_brightness`, `timezone_offset`, `lock_n_go_timeout`, `auto_lock_timeout`, `unlatch_duration`, `unlocked_position_offset`, `locked_position_offset`, `single_locked_position_offset`, `unlocked_to_locked_transition_offset` | `sound_level`, `rto_timeout`, `electric_strike_delay`, `electric_strike_duration`, `doorbell_suppression_duration` | |
+| `select` | `timezone`, `advertising_mode`, `battery_type`, `motor_speed` | `sound_ring`, `sound_open`, `sound_rto`, `sound_cm`, `doorbell_suppression` | `single_button_press_action`, `double_button_press_action`, `fob_action_1` to `3` |
+| `button` | `request_calibration` | | `unpair`, `reboot` (the Nuki device), `query_state`, `query_config`, `query_battery`, `query_keypad` |
+
+Changing a setting needs the security PIN. The configuration is read again after every
+write, so an entity shows what the device really has.
 
 Every authorization and every time control entry is a switch that enables and disables it,
 like the keypad entries with `keypad_topic_per_entry`. Switches of entries that are gone

@@ -39,6 +39,21 @@ template<typename T, typename F> static std::string text_of(F to_string, T value
 void NukiHubLock::setup_device() {
   // Several settings written in a row share one read of the config
   this->nuki_lock_.set_config_cache_ttl(10000);
+#ifdef USE_BINARY_SENSOR
+  if (this->door_sensor_input_ != nullptr) {
+    // Every state, the first one included
+    this->door_sensor_input_->add_full_state_callback([this](optional<bool> previous, optional<bool> current) {
+      if (current.has_value()) {
+        this->door_report_open_ = *current;
+        this->door_report_pending_ = true;
+      }
+    });
+    if (this->door_sensor_input_->has_state()) {
+      this->door_report_open_ = this->door_sensor_input_->state;
+      this->door_report_pending_ = true;
+    }
+  }
+#endif
 }
 
 // --------------------------------------------------------------------------------------------
@@ -153,6 +168,21 @@ void NukiHubLock::publish_state_() {
 
 void NukiHubLock::publish_unavailable() { this->state_known_ = false; }
 
+// The names of the time zones the lock knows, made once and kept
+static const std::vector<const char *> &timezone_names() {
+  static std::vector<const char *> names;
+  if (names.empty()) {
+    for (uint16_t id = 0; id < 128; id++) {
+      char name[40] = {0};
+      timezone_to_string((TimeZoneId) id, name);
+      if (name[0] != 0 && strcmp(name, "None") != 0 && (uint16_t) timezone_to_enum(name) == id) {
+        names.push_back(strdup(name));
+      }
+    }
+  }
+  return names;
+}
+
 std::vector<NukiHubComponent::DiscoverySetting> NukiHubLock::discovery_settings() const {
   return {
       {"ledEnabled", "LED enabled", false, 0, 0},
@@ -173,6 +203,23 @@ std::vector<NukiHubComponent::DiscoverySetting> NukiHubLock::discovery_settings(
       {"doubleButtonPressAction", "Double button press", true, 0, 0, names_of(BUTTON_PRESS_ACTIONS)},
       {"batteryType", "Battery type", true, 0, 0, names_of(BATTERY_TYPES)},
       {"motorSpeed", "Motor speed", true, 0, 0, names_of(MOTOR_SPEEDS)},
+      {"pairingEnabled", "Bluetooth pairing", false, 0, 0},
+      {"dstMode", "Daylight saving time", false, 0, 0},
+      {"timeZoneOffset", "Time zone offset", false, 0, 60},
+      {"timeZone", "Time zone", false, 0, 0, timezone_names()},
+      {"autoUnLockDisabled", "Auto unlock disabled", true, 0, 0},
+      {"nightModeAutoLockEnabled", "Night mode auto lock", true, 0, 0},
+      {"nightModeAutoUnlockDisabled", "Night mode auto unlock disabled", true, 0, 0},
+      {"nightModeImmediateLockOnStart", "Night mode lock at start", true, 0, 0},
+      {"autoUpdateEnabled", "Automatic updates", true, 0, 0},
+      {"automaticBatteryTypeDetection", "Automatic battery type detection", true, 0, 0},
+      {"enableSlowSpeedDuringNightMode", "Slow speed during night mode", true, 0, 0},
+      {"detachedCylinder", "Detached cylinder", true, 0, 0},
+      {"lockNgoTimeout", "Lock 'n' Go timeout", true, 5, 60},
+      {"unlockedPositionOffsetDegrees", "Unlocked position offset", true, -90, 180},
+      {"lockedPositionOffsetDegrees", "Locked position offset", true, -180, 90},
+      {"singleLockedPositionOffsetDegrees", "Single locked position offset", true, -180, 180},
+      {"unlockedToLockedTransitionOffsetDegrees", "Unlocked to locked transition offset", true, -180, 180},
   };
 }
 
@@ -284,6 +331,30 @@ void NukiHubLock::queue_ble_action_(LockAction action, const std::string &text, 
 
 void NukiHubLock::loop() {
   NukiHubComponent::loop();
+#ifdef USE_BINARY_SENSOR
+  // One report at a time: a change while one is on its way is sent after it, with the state
+  // the door has then
+  if (this->door_report_pending_ && !this->door_report_queued_ && this->is_paired()) {
+    this->door_report_pending_ = false;
+    this->door_report_queued_ = true;
+    const bool open = this->door_report_open_;
+    Operation op;
+    op.name = "report door sensor";
+    op.step = [this, open] { return this->nuki_lock_.report_door_sensor_state(open); };
+    op.done = [this, open](CmdResult result) {
+      this->door_report_queued_ = false;
+      if (result == CmdResult::Success) {
+        ESP_LOGI(TAG, "Door sensor: reported %s", open ? "open" : "closed");
+        this->request_state_update();
+      } else {
+        ESP_LOGW(TAG, "Door sensor: report of %s failed (%s)", open ? "open" : "closed", result_to_string(result));
+        // The lock did not get it (out of range, busy): the state the door has then, a little later
+        this->set_timeout("door_report_retry", 30000, [this] { this->door_report_pending_ = true; });
+      }
+    };
+    this->enqueue(std::move(op));
+  }
+#endif
   if (!this->hybrid_) {
     return;
   }
