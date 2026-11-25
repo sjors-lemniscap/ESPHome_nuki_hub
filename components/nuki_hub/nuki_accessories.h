@@ -7,7 +7,7 @@
  * through NukiBle/NukiLock's BLE connection to the lock.
  *
  * Created: 2022
- * License: GNU GENERAL PUBLIC LICENSE (see LICENSE)
+ * License: MIT (see LICENSE)
  *
  * This library implements the communication from an ESP32 via BLE to a Nuki smart lock.
  * Based on the Nuki Smart Lock API V2.2.1

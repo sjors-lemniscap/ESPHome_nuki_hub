@@ -68,3 +68,7 @@ Everything has been run on an Opener with a keypad only. The Smart Lock type is 
 ## What is no longer here
 
 Upstream's `lock: - platform: nuki_lock` (a Smart Lock as a native Home Assistant lock with its settings as entities, hybrid mode and door sensor emulation) was removed from this repository to keep it to one component. For that, use [uriyacovy/ESPHome_nuki_lock](https://github.com/uriyacovy/ESPHome_nuki_lock).
+
+## License
+
+MIT, see [LICENSE](LICENSE). The three projects this builds on are MIT licensed as well; NukiBleEsp32 changed from GPL 3 to MIT in October 2024.

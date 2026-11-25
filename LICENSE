@@ -1,6 +1,9 @@
 MIT License
 
-Copyright (c) 2022 uriyacovy
+Copyright (c) 2022 uriyacovy and the ESPHome Nuki Lock contributors
+Copyright (c) 2024 I-Connect (NukiBleEsp32, which the Bluetooth protocol code derives from)
+Copyright (c) 2022 Jan-Ole Schümann (Nuki Hub, whose MQTT interface this component follows)
+Copyright (c) 2026 sjors-lemniscap
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
