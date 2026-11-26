@@ -643,6 +643,9 @@ class NukiBle : public esphome::esp32_ble_client::BLEClientBase {
     uint16_t expected_authorization_entry_count_ = 0;
     // Entries received at the last timeout restart, so the timeout restarts per entry
     size_t auth_entries_last_size_ = 0;
+    // The Status COMPLETE that follows the last entry ends the list, also when fewer entries
+    // came than the count announced
+    bool auth_entries_complete_received_ = false;
     // Guards the clear/reset above against the same Idle-state-keeps-getting-re-polled
     // problem described for keypad_request_sent.
     bool auth_entries_request_sent_ = false;

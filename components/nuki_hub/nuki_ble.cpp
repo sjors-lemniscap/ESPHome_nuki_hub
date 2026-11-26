@@ -477,6 +477,7 @@ CmdResult NukiBle::retrieve_authorization_entries(const uint16_t offset, const u
     if (!this->auth_entries_request_sent_) {
       this->authorization_entry_count_received_ = false;
       this->expected_authorization_entry_count_ = 0;
+      this->auth_entries_complete_received_ = false;
       this->auth_entries_request_sent_ = true;
     }
 
@@ -521,9 +522,9 @@ CmdResult NukiBle::retrieve_authorization_entries(const uint16_t offset, const u
   if (received < this->expected_authorization_entry_count_) {
     const int64_t waited = (esp_timer_get_time() / 1000) - this->auth_entries_retrieval_time_now_;
     // The count can be higher than the number of entries that follow (seen on an Opener:
-    // 3 announced, 2 sent). Once entries came in and nothing followed for a second, the
-    // list is taken as complete.
-    if (received > 0 && waited > 1000) {
+    // 3 announced, 2 sent). The Status COMPLETE after the last entry ends the list; as a
+    // fallback, so does a second without a new entry once some came in.
+    if (this->auth_entries_complete_received_ || (received > 0 && waited > 1000)) {
       ESP_LOGD(TAG, "%u authorization entries announced, %u received", this->expected_authorization_entry_count_,
                (unsigned) received);
     } else if (waited > this->general_timeout_duration_) {
@@ -1606,6 +1607,14 @@ void NukiBle::handle_return_message(Command returnCode, unsigned char* data, uin
     case Command::Status : {
       print_buffer((uint8_t*)data, dataLen, false, "status", this->debug_nuki_hex_data_);
       this->received_status_ = data[0];
+      // The count, the entries and this COMPLETE can all be handled before
+      // retrieve_authorization_entries() gets its next turn and leaves Idle, so the sent
+      // request counts as well.
+      if ((CommandStatus) this->received_status_ == CommandStatus::Complete &&
+          this->authorization_entry_count_received_ &&
+          (this->auth_entries_request_sent_ || this->auth_entries_retrieval_state_ != EntryRetrievalState::Idle)) {
+        this->auth_entries_complete_received_ = true;
+      }
       if ((CommandStatus) this->received_status_ == CommandStatus::Accepted) {
         this->status_accepted_seen_ = true;
       } else if ((CommandStatus) this->received_status_ == CommandStatus::Complete) {
