@@ -90,6 +90,12 @@ class NukiHubLock : public NukiHubComponent {
   bool door_report_pending_{false};
   bool door_report_queued_{false};
   bool door_report_open_{false};
+  // The door opened since the lock last took an "open": the lock holds the latch back until
+  // it hears that, so it is sent even when the door has closed again by then
+  bool door_report_open_owed_{false};
+  uint32_t door_report_failing_since_{0};
+  uint32_t door_report_accepted_at_{0};
+  uint32_t door_report_resent_at_{0};
 #endif
 
   bool hybrid_{false};

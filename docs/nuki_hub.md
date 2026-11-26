@@ -221,7 +221,13 @@ nuki_hub:
 ```
 
 The lock then reports the door on `doorSensorState` like it does with its own sensor. The
-emulated sensor is not shown in the Nuki app. Not run on a device here.
+emulated sensor is not shown in the Nuki app.
+
+A report goes before queued commands. One the lock does not answer (it is busy while the motor
+runs) is sent again for half a minute, and an opened door is still reported as open when it
+has closed again by then, because the lock holds the latch back until it hears that. If the
+lock later shows another door state than the sensor has, the state is sent once more. Not run
+on a device here.
 
 ## Security
 

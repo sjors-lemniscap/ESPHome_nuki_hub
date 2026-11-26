@@ -64,10 +64,6 @@ def add_nuki_build_requirements():
             path=str(NUKI_SODIUM_DIR),
         )
 
-    add_idf_component(
-        name="crc16",
-        repo="https://github.com/AzonInc/Crc16.git",
-    )
     # NukiBleEsp32 is vendored directly as component sources instead of a fetched IDF
     # component, see nuki_ble.cpp/.h, nuki_lock_protocol.cpp/.h, nuki_opener_protocol.cpp/.h
     # etc. in this directory. It talks to the Nuki device via ESPHome's own (Bluedroid-based)

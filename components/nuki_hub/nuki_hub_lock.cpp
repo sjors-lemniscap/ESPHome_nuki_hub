@@ -45,7 +45,11 @@ void NukiHubLock::setup_device() {
     this->door_sensor_input_->add_full_state_callback([this](optional<bool> previous, optional<bool> current) {
       if (current.has_value()) {
         this->door_report_open_ = *current;
+        this->door_report_open_owed_ |= *current;
         this->door_report_pending_ = true;
+        // A new door event goes out now, not after the delay of a retry
+        this->door_report_failing_since_ = 0;
+        this->cancel_timeout("door_report_retry");
       }
     });
     if (this->door_sensor_input_->has_state()) {
@@ -88,6 +92,24 @@ Operation NukiHubLock::make_state_operation() {
 
 void NukiHubLock::publish_state_() {
   const KeyTurnerState &s = this->state_;
+#ifdef USE_BINARY_SENSOR
+  // The lock shows another door state than the sensor has (a report that failed for good, a
+  // lock that restarted): send it again, at most once a minute so a lock that does not take
+  // reports is not asked forever.
+  if (this->door_sensor_input_ != nullptr && this->door_sensor_input_->has_state() && !this->door_report_pending_ &&
+      !this->door_report_queued_ && this->door_report_failing_since_ == 0 &&
+      (s.doorSensorState == DoorSensorState::DoorOpened || s.doorSensorState == DoorSensorState::DoorClosed) &&
+      this->door_report_open_ != (s.doorSensorState == DoorSensorState::DoorOpened)) {
+    const uint32_t now = millis();
+    if (now - this->door_report_accepted_at_ > 2000 &&
+        (this->door_report_resent_at_ == 0 || now - this->door_report_resent_at_ > 60000)) {
+      ESP_LOGI(TAG, "Door sensor: the lock has the door %s, reporting %s again",
+               this->door_report_open_ ? "closed" : "open", this->door_report_open_ ? "open" : "closed");
+      this->door_report_resent_at_ = now | 1;
+      this->door_report_pending_ = true;
+    }
+  }
+#endif
   const std::string lock_state = text_of(lock_state_to_string, s.lockState);
   const std::string trigger = text_of(trigger_to_string, s.trigger);
   const std::string last_action = text_of(lock_action_to_string, s.lastLockAction);
@@ -344,7 +366,7 @@ void NukiHubLock::loop() {
   if (this->door_report_pending_ && !this->door_report_queued_ && this->is_paired()) {
     this->door_report_pending_ = false;
     this->door_report_queued_ = true;
-    const bool open = this->door_report_open_;
+    const bool open = this->door_report_open_owed_ || this->door_report_open_;
     Operation op;
     op.name = "report door sensor";
     op.step = [this, open] { return this->nuki_lock_.report_door_sensor_state(open); };
@@ -352,14 +374,37 @@ void NukiHubLock::loop() {
       this->door_report_queued_ = false;
       if (result == CmdResult::Success) {
         ESP_LOGI(TAG, "Door sensor: reported %s", open ? "open" : "closed");
+        this->door_report_failing_since_ = 0;
+        this->door_report_accepted_at_ = millis();
+        if (open) {
+          this->door_report_open_owed_ = false;
+          // Closed again while the "open" was on its way
+          this->door_report_pending_ |= !this->door_report_open_;
+        }
         this->request_state_update();
+        return;
+      }
+      // A busy lock (motor running) leaves a report unanswered: again after a second, then
+      // every three, for half a minute. After that the next state read shows the difference
+      // and sends it once more, see publish_state_().
+      if (this->door_report_failing_since_ == 0) {
+        this->door_report_failing_since_ = millis() | 1;
+      }
+      const uint32_t failing = millis() - this->door_report_failing_since_;
+      if (failing < 30000) {
+        ESP_LOGW(TAG, "Door sensor: report of %s failed (%s), trying again", open ? "open" : "closed",
+                 result_to_string(result));
+        this->set_timeout("door_report_retry", failing < 1000 ? 1000 : 3000,
+                          [this] { this->door_report_pending_ = true; });
       } else {
-        ESP_LOGW(TAG, "Door sensor: report of %s failed (%s)", open ? "open" : "closed", result_to_string(result));
-        // The lock did not get it (out of range, busy): the state the door has then, a little later
-        this->set_timeout("door_report_retry", 30000, [this] { this->door_report_pending_ = true; });
+        ESP_LOGW(TAG, "Door sensor: report of %s failed (%s), giving up", open ? "open" : "closed",
+                 result_to_string(result));
+        this->door_report_failing_since_ = 0;
+        this->door_report_open_owed_ = false;
       }
     };
-    this->enqueue(std::move(op));
+    // Before queued commands: the lock holds the latch back until it hears the door open
+    this->enqueue(std::move(op), true);
   }
 #endif
   if (!this->hybrid_) {
